@@ -1,31 +1,50 @@
 # BXP-SecretSonar
 
-**Framework de découverte, validation et post‑exploitation de secrets exposés.**  
+**Framework avancé de découverte, validation et exploitation de secrets exposés.**  
 Version `0.5.0-alpha` — Fonctionne sur Linux, macOS, Windows et Android (Termux).
 
 ---
 
 ## 🎯 Objectif
 
-BXP-SecretSonar automatise la recherche de secrets (clés API, tokens, identifiants) dans des applications web, 
-évalue leur criticité et fournit un cadre d’exploitation contrôlé pour en mesurer l’impact.
+BXP-SecretSonar automatise la recherche de secrets (clés API, tokens, identifiants) dans des applications web, évalue leur criticité et fournit un cadre d’exploitation contrôlé pour en mesurer l’impact.
 
-Il a été conçu pour les audits de sécurité autorisés.  
-Chaque utilisateur est responsable de ses actions.
+Il est conçu pour les audits de sécurité autorisés. Chaque utilisateur est responsable de ses actes.
 
 ---
 
 ## 🧩 Fonctionnalités
 
-- **Collecte HTTP profonde** (`--deep`) : exploration des headers, robots.txt, sitemap, fichiers JS/CSS
-- **Détection** : expressions régulières, analyse d’entropie, signatures de honeypots
-- **Validation multi‑niveaux** : test HTTP générique + validations spécialisées (AWS `GetCallerIdentity`, …)
-- **Score d’impact** : blast radius, criticité, score composite
-- **Framework d’exploitation modulaire** : SSH, SMB, HTTP RCE, SQLi avec fallbacks natifs
-- **Console interactive** : gestion de sessions, shell SSH, upload/download SFTP, exécution de commandes
-- **Payloads** : reverse shells (Python, Bash, PowerShell), bind shell, exécution système
-- **Seuils personnalisables** : `--min-confidence`, `--min-impact`, `--honeypot-threshold`
-- **Multi‑plateforme** : adaptation automatique à l’environnement, alternatives quand une dépendance manque
+### 🔎 Découverte de cibles (Discovery)
+- **Providers sans clé API** : crt.sh, CertSpotter, Wayback Machine, AlienVault OTX, URLScan, HackerTarget, S3 Scanner public, GitHub Search
+- **Providers avec clé API (free tier)** : Shodan, Censys, SecurityTrails, BinaryEdge, Exa, Firecrawl
+- Recherche par mot-clé, domaine, IP, ou technologie
+
+### 📡 Collecte & Analyse
+- Collecte HTTP profonde (`--deep`) : headers, robots.txt, sitemap, fichiers JS/CSS
+- Détection par expressions régulières et analyse d’entropie
+- Détection de honeypots (signatures passives + sondes actives comportementales)
+- Score de risque composite (impact, blast radius, criticité)
+
+### 🛡️ Validation
+- Validation HTTP générique
+- Validation AWS renforcée (via `GetCallerIdentity`)
+- Validation multi-niveaux ajustant le score de confiance
+
+### 💥 Exploitation modulaire
+- Plugins d’exploitation : SSH, SMB, HTTP RCE, SQLi (avec fallbacks natifs)
+- Payloads : reverse shells (Python, Bash, PowerShell), bind shell, commandes système
+- Exploitation automatique déclenchable par seuils (`--min-confidence`, `--min-impact`, `--honeypot-threshold`)
+
+### 🖥️ Console interactive post‑exploitation
+- Gestion de sessions persistantes (connexion SSH conservée)
+- Shell SSH interactif, exécution de commandes (`exec`)
+- Upload/download de fichiers via SFTP
+- Génération de payloads depuis la console
+
+### ⏱️ Planification (Scheduler)
+- Tâches planifiées pour lancer des découvertes et des scans automatiquement
+- Rapports JSON horodatés
 
 ---
 
@@ -54,11 +73,17 @@ secretsonar scan -t https://example.com
 # Scan profond
 secretsonar scan -t https://example.com --deep
 
+# Découverte de cibles
+secretsonar discover -q "example.com" -p crtsh --limit 10 --scan
+
 # Exploitation automatique (nécessite --authorized)
 secretsonar scan -t https://cible.com --exploit --authorized --min-confidence 0.8
 
 # Console post‑exploitation
 secretsonar console --authorized
+
+# Planificateur (découverte + scan toutes les 24h)
+secretsonar scheduler --interval 24 --queries queries.txt
 ```
 
 ---
@@ -78,6 +103,7 @@ src/bxp_secretsonar/
 │   └── validators/     # ProtocolProber
 ├── exploit/            # Orchestrateur (framework.py)
 ├── console/            # Console interactive (interactive.py)
+├── discovery/          # Providers de découverte (Shodan, CRT, etc.)
 ├── core/               # Moteur, modèles, environnement
 └── cli.py              # Interface Click
 ```
@@ -86,9 +112,10 @@ src/bxp_secretsonar/
 
 🛣️ Prochaines étapes
 
-· Validation multi‑cloud (GCP, Azure)
+· Modules de persistance (clé SSH, cron)
+· Pivoting et proxy SOCKS
 · Détection de leurres par Machine Learning
-· Modules de persistance, pivoting et exfiltration
+· Mode daemon pour le scheduler
 
 ---
 
