@@ -39,15 +39,12 @@ def scan(target, exploit, authorized, strategy, console_after, min_confidence, m
 
     asyncio.run(run())
 
-    # Si des sessions ont été créées, on peut lancer la console
     if console_after and engine.framework and engine.framework.sessions:
         console.print(f"[green]{len(engine.framework.sessions)} session(s) exploitable(s) disponibles.[/]")
-        # Sauvegarder le framework dans un fichier temporaire pour la console
         fd, path = tempfile.mkstemp(suffix=".session")
         with os.fdopen(fd, 'wb') as f:
             pickle.dump(engine.framework, f)
         console.print("[dim]Lancement de la console interactive...[/]")
-        # Appeler la console avec ce fichier
         from bxp_secretsonar.console.interactive import launch_interactive_console
         launch_interactive_console(engine.framework)
         os.unlink(path)
@@ -74,6 +71,28 @@ def console_cmd(authorized, load_sessions):
         fw = ExploitFramework(authorized=True)
     launch_interactive_console(fw)
 
+@cli.command()
+@click.option('--query', '-q', required=True, help='Mot-clé ou filtre (ex: "nginx", "product:Apache")')
+@click.option('--provider', '-p', help='Provider à utiliser (shodan, crtsh, firecrawl)')
+@click.option('--limit', '-l', default=10, help='Nombre maximum de résultats')
+@click.option('--scan', is_flag=True, help='Scanner automatiquement les cibles découvertes')
+def discover(query, provider, limit, scan):
+    """Découvre des cibles via des providers (Shodan, CRT.sh, etc.) et les scanne optionnellement."""
+    from bxp_secretsonar.discovery.manager import DiscoveryManager
+    manager = DiscoveryManager()
+    urls = asyncio.run(manager.run(query=query, limit=limit, provider=provider))
+    if not urls:
+        console.print("[!] Aucune URL trouvée.")
+        return
+    console.print(f"\n[+] {len(urls)} cible(s) découverte(s) :")
+    for u in urls:
+        console.print(f"    {u}")
+    if scan:
+        console.print("\n[+] Lancement du scan sur les cibles...")
+        engine = SecretSonarEngine()
+        asyncio.run(engine.run(urls))
+
 if __name__ == '__main__':
     cli()
+
 app = cli
