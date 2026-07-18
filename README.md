@@ -303,4 +303,5 @@ Responsabilité: Les auteurs ne sont pas responsables de toute utilisation abusi
 ✅ Respecter les robots.txt et les politiques de sécurité
 ✅ Utiliser des networks isolés pour les tests
 ✅ Sauvegarder les sessions de manière sécurisée
+
 BXP-SecretSonar est un projet de BriadeXPhantom de Phantom-BXP - 18 juillet 2026*
