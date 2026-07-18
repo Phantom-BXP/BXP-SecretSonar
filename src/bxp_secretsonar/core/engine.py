@@ -11,6 +11,23 @@ from bxp_secretsonar.collectors.deep_collector import DeepCollector
 from bxp_secretsonar.analyzers.regex_engine import analyze_content
 from bxp_secretsonar.validators.generic_http import GenericHttpValidator
 from bxp_secretsonar.validators.aws_validator import AWSValidator
+from bxp_secretsonar.validators.stripe_validator import StripeValidator
+from bxp_secretsonar.validators.paypal_validator import PayPalValidator
+from bxp_secretsonar.validators.twilio_validator import TwilioValidator
+from bxp_secretsonar.validators.github_validator import GitHubValidator
+from bxp_secretsonar.validators.gitlab_validator import GitLabValidator
+from bxp_secretsonar.validators.gcp_validator import GCPValidator
+from bxp_secretsonar.validators.slack_validator import SlackValidator
+from bxp_secretsonar.validators.discord_validator import DiscordValidator
+from bxp_secretsonar.validators.anthropic_validator import AnthropicValidator
+from bxp_secretsonar.validators.openai_validator import OpenAIValidator
+from bxp_secretsonar.validators.revolut_validator import RevolutValidator
+from bxp_secretsonar.validators.twitch_validator import TwitchValidator
+from bxp_secretsonar.validators.heroku_validator import HerokuValidator
+from bxp_secretsonar.validators.sendgrid_validator import SendGridValidator
+from bxp_secretsonar.validators.mailgun_validator import MailgunValidator
+from bxp_secretsonar.validators.atlassian_validator import AtlassianValidator
+from bxp_secretsonar.validators.shopify_validator import ShopifyValidator
 from bxp_secretsonar.detectors.passive import analyze_passive
 from bxp_secretsonar.detectors.active import probe_behavior
 from bxp_secretsonar.detectors.scorer import compute_risk_score
@@ -19,6 +36,7 @@ from bxp_secretsonar.plugins.analyzers.blast_radius import analyze_blast_radius
 from bxp_secretsonar.plugins.analyzers.impact_scorer import compute_impact_score
 from bxp_secretsonar.core.environment import EnvironmentProfile
 from bxp_secretsonar.exploit.framework import ExploitFramework
+from bxp_secretsonar.injectors.param_injector import ParamInjector
 
 console = Console()
 VALIDATION_PRIORITY_THRESHOLD = 3
@@ -28,19 +46,35 @@ class SecretSonarEngine:
     def __init__(self):
         self.env = EnvironmentProfile()
         self.queue = PriorityAsyncQueue(maxsize=self.env.max_concurrency * 5)
-        # Collecteur : DeepCollector si deep_scan activé, sinon HttpCollector
         self.deep_scan = False
+        self.injector = None
         if self.deep_scan:
             self.collector = DeepCollector(ssl_verify=self.env.ssl_verify, max_concurrency=self.env.max_concurrency)
         else:
             self.collector = HttpCollector(ssl_verify=self.env.ssl_verify, max_concurrency=self.env.max_concurrency)
-        # Validateurs (générique + AWS spécialisé)
         self.validator_generic = GenericHttpValidator(ssl_verify=self.env.ssl_verify, timeout=5.0)
         self.validator_aws = AWSValidator(ssl_verify=self.env.ssl_verify, timeout=5.0)
+        self.validator_stripe = StripeValidator(ssl_verify=self.env.ssl_verify, timeout=5.0)
+        self.validator_paypal = PayPalValidator(ssl_verify=self.env.ssl_verify, timeout=5.0)
+        self.validator_twilio = TwilioValidator(ssl_verify=self.env.ssl_verify, timeout=5.0)
+        self.validator_github = GitHubValidator(ssl_verify=self.env.ssl_verify, timeout=5.0)
+        self.validator_gitlab = GitLabValidator(ssl_verify=self.env.ssl_verify, timeout=5.0)
+        self.validator_gcp = GCPValidator(ssl_verify=self.env.ssl_verify, timeout=5.0)
+        self.validator_slack = SlackValidator(ssl_verify=self.env.ssl_verify, timeout=5.0)
+        self.validator_discord = DiscordValidator(ssl_verify=self.env.ssl_verify, timeout=5.0)
+        self.validator_anthropic = AnthropicValidator(ssl_verify=self.env.ssl_verify, timeout=5.0)
+        self.validator_openai = OpenAIValidator(ssl_verify=self.env.ssl_verify, timeout=5.0)
+        self.validator_revolut = RevolutValidator(ssl_verify=self.env.ssl_verify, timeout=5.0)
+        self.validator_twitch = TwitchValidator(ssl_verify=self.env.ssl_verify, timeout=5.0)
+        self.validator_heroku = HerokuValidator(ssl_verify=self.env.ssl_verify, timeout=5.0)
+        self.validator_sendgrid = SendGridValidator(ssl_verify=self.env.ssl_verify, timeout=5.0)
+        self.validator_mailgun = MailgunValidator(ssl_verify=self.env.ssl_verify, timeout=5.0)
+        self.validator_atlassian = AtlassianValidator(ssl_verify=self.env.ssl_verify, timeout=5.0)
+        self.validator_shopify = ShopifyValidator(ssl_verify=self.env.ssl_verify, timeout=5.0)
         self.prober = ProtocolProber()
         self._running = False
         self._validated_results: list[Validated] = []
-        self.framework = None  # sera activé depuis le CLI si --exploit
+        self.framework = None
         self.min_confidence = 0.7
         self.min_impact = "low"
         self.honeypot_threshold = 0.5
@@ -65,6 +99,15 @@ class SecretSonarEngine:
             artifact = await self.collector.collect(url)
             if not artifact:
                 return
+            if self.injector:
+                try:
+                    injected = await self.injector.inject(artifact)
+                    for inj in injected:
+                        artifact.content += '\n--- INJECTED ---\n' + inj.content
+                        artifact.metadata['injected'] = True
+                except Exception as e:
+                    console.print(f'[yellow]Injection error: {e}[/]')
+
             passive_signals = analyze_passive(artifact)
             active_signals = await probe_behavior(url, ssl_verify=self.env.ssl_verify, timeout=3.0)
             risk_score = compute_risk_score(url, passive_signals, active_signals)
@@ -73,17 +116,12 @@ class SecretSonarEngine:
                 evidence = Evidence(**ev_data)
                 candidate = Candidate(
                     evidence=evidence,
-                    confidence_score=ev_data["base_confidence"],
-                    priority=max(1, min(10, int((1.0 - ev_data["base_confidence"]) * 10))),
+                    confidence_score=ev_data['base_confidence'],
+                    priority=max(1, min(10, int((1.0 - ev_data['base_confidence']) * 10)))
                 )
                 await self.queue.put(candidate)
                 if candidate.priority <= VALIDATION_PRIORITY_THRESHOLD:
-                    # Routage du validateur selon le type de secret
-                    if 'aws' in candidate.evidence.pattern_name.lower():
-                        validated = await self.validator_aws.validate(candidate)
-                    else:
-                        validated = await self.validator_generic.validate(candidate)
-
+                    validated = await self._route_validator(candidate)
                     validated.risk_score = risk_score
                     blast_radius = analyze_blast_radius(evidence.context_before, evidence.context_after)
                     protocol_probe = None
@@ -98,7 +136,6 @@ class SecretSonarEngine:
                     )
                     self._validated_results.append(validated)
 
-                    # Exploitation automatique si framework activé et seuils respectés
                     if self.framework:
                         try:
                             do_exploit = True
@@ -120,6 +157,47 @@ class SecretSonarEngine:
                             console.print(f"[red]Exploit error: {ex}[/]")
         except Exception as e:
             console.print(f"[red]❌ Error processing {url}: {e}[/]")
+
+    async def _route_validator(self, candidate: Candidate) -> Validated:
+        p = candidate.evidence.pattern_name.lower()
+        if 'aws' in p:
+            return await self.validator_aws.validate(candidate)
+        elif 'stripe' in p:
+            return await self.validator_stripe.validate(candidate)
+        elif 'paypal' in p:
+            return await self.validator_paypal.validate(candidate)
+        elif 'twilio' in p:
+            return await self.validator_twilio.validate(candidate)
+        elif 'github' in p:
+            return await self.validator_github.validate(candidate)
+        elif 'gitlab' in p:
+            return await self.validator_gitlab.validate(candidate)
+        elif 'gcp' in p or 'google' in p:
+            return await self.validator_gcp.validate(candidate)
+        elif 'slack' in p:
+            return await self.validator_slack.validate(candidate)
+        elif 'discord' in p:
+            return await self.validator_discord.validate(candidate)
+        elif 'anthropic' in p or 'claude' in p:
+            return await self.validator_anthropic.validate(candidate)
+        elif 'openai' in p:
+            return await self.validator_openai.validate(candidate)
+        elif 'revolut' in p:
+            return await self.validator_revolut.validate(candidate)
+        elif 'twitch' in p:
+            return await self.validator_twitch.validate(candidate)
+        elif 'heroku' in p:
+            return await self.validator_heroku.validate(candidate)
+        elif 'sendgrid' in p:
+            return await self.validator_sendgrid.validate(candidate)
+        elif 'mailgun' in p:
+            return await self.validator_mailgun.validate(candidate)
+        elif 'atlassian' in p or 'jira' in p or 'confluence' in p:
+            return await self.validator_atlassian.validate(candidate)
+        elif 'shopify' in p:
+            return await self.validator_shopify.validate(candidate)
+        else:
+            return await self.validator_generic.validate(candidate)
 
     def _display_results(self) -> None:
         if not self._validated_results:

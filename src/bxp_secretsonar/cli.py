@@ -1,6 +1,7 @@
 import asyncio, click, pickle, os, tempfile
 from rich.console import Console
 from bxp_secretsonar.core.engine import SecretSonarEngine
+from bxp_secretsonar.injectors.param_injector import ParamInjector
 from bxp_secretsonar.exploit.framework import ExploitFramework
 
 console = Console()
@@ -18,8 +19,9 @@ def cli():
 @click.option('--min-impact', type=click.Choice(['low', 'medium', 'high', 'critical']), default='low', help='Impact minimum requis')
 @click.option('--honeypot-threshold', type=float, default=0.5, help='Score honeypot max avant de refuser l\'exploitation')
 @click.option('--deep', is_flag=True, help='Active le DeepScan (analyse JS, headers, robots.txt, etc.)')
+@click.option('--inject', is_flag=True, help='Active l\'injection active de paramètres debug/erreurs')
 @click.option('--console-after', is_flag=True, help='Launch interactive console after scan with obtained sessions')
-def scan(target, exploit, authorized, strategy, console_after, min_confidence, min_impact, honeypot_threshold, deep):
+def scan(target, exploit, authorized, strategy, console_after, min_confidence, min_impact, honeypot_threshold, deep, inject):
     """Run SecretSonar with optional exploitation."""
     if exploit and not authorized:
         console.print("[bold red]ERROR: Exploitation requires --authorized flag. Aborting.[/]")
@@ -27,6 +29,8 @@ def scan(target, exploit, authorized, strategy, console_after, min_confidence, m
 
     engine = SecretSonarEngine()
     engine.deep_scan = deep
+    if inject:
+        engine.injector = ParamInjector(ssl_verify=engine.env.ssl_verify)
     engine.min_confidence = min_confidence
     engine.min_impact = min_impact
     engine.honeypot_threshold = honeypot_threshold

@@ -65,6 +65,8 @@ class InteractiveConsole:
             self.generate_payload(args)
         elif cmd == "persist":
             await self.persist_command(args)
+        elif cmd == "deep_validate":
+            await self.deep_validate_command(args)
         elif cmd == "kill":
             self.kill_session(args)
         elif cmd in ("exit", "quit"):
@@ -395,3 +397,58 @@ def launch_interactive_console(framework: ExploitFramework):
                 console.print(f"[red]Échec: {result['output']}[/]")
         else:
             console.print(f"[red]Méthode de persistance inconnue: {method}[/]")
+
+    async def deep_validate_command(self, args):
+        """Validation approfondie d'un secret sur le service détecté."""
+        if not args:
+            console.print("[red]Usage: deep_validate <provider> [secret][/]")
+            console.print("Providers supportés : stripe, paypal, twilio, github, ...")
+            return
+        provider = args[0].lower()
+        secret = args[1] if len(args) > 1 else None
+
+        # Récupérer le secret depuis la session courante ou la demande manuelle
+        if not secret and self.current_session and self.current_session.evidence:
+            secret = self.current_session.evidence.matched_value
+        if not secret:
+            console.print("[red]Aucun secret fourni. Spécifiez un secret ou utilisez une session active.[/]")
+            return
+
+        # Créer un objet Candidate minimal pour le validateur
+        from bxp_secretsonar.core.models import Evidence, Candidate
+        evidence = Evidence(
+            artifact_id="manual",
+            pattern_name=f"manual_{provider}_key",
+            matched_value=secret,
+            context_before="",
+            context_after="",
+            entropy_score=0.0
+        )
+        candidate = Candidate(evidence=evidence, confidence_score=0.5, priority=5)
+
+        # Router vers le bon validateur
+        validator = None
+        if provider in ("stripe",):
+            from bxp_secretsonar.validators.stripe_validator import StripeValidator
+            validator = StripeValidator(ssl_verify=self.env.ssl_verify, timeout=5.0)
+        elif provider in ("paypal",):
+            from bxp_secretsonar.validators.paypal_validator import PayPalValidator
+            validator = PayPalValidator(ssl_verify=self.env.ssl_verify, timeout=5.0)
+        elif provider in ("twilio",):
+            from bxp_secretsonar.validators.twilio_validator import TwilioValidator
+            validator = TwilioValidator(ssl_verify=self.env.ssl_verify, timeout=5.0)
+        # Ajouter d'autres providers si besoin
+
+        if not validator:
+            console.print(f"[red]Validateur pour '{provider}' non trouvé.[/]")
+            return
+
+        console.print(f"[dim]Validation approfondie de {provider}...[/]")
+        validated = await validator.validate(candidate)
+        if validated.is_confirmed:
+            console.print(f"[green]✓ Secret valide (confiance: {validated.candidate.confidence_score:.2f})[/]")
+            metadata = validated.candidate.evidence.metadata
+            for k, v in metadata.items():
+                console.print(f"  {k}: {v}")
+        else:
+            console.print(f"[red]✗ Secret invalide ou rejeté.[/]")
