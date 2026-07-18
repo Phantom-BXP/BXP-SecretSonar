@@ -63,12 +63,16 @@ class InteractiveConsole:
             await self.spawn_local_shell()
         elif cmd == "generate":
             self.generate_payload(args)
+        elif cmd == "bypass_2fa":
+            await self.bypass_2fa_command(args)
         elif cmd == "pivot":
             await self.pivot_command(args)
         elif cmd == "persist":
             await self.persist_command(args)
         elif cmd == "deep_validate":
             await self.deep_validate_command(args)
+        elif cmd == "bypass_2fa":
+            await self.bypass_2fa_command(args)
         elif cmd == "pivot":
             await self.pivot_command(args)
         elif cmd == "persist":
@@ -571,3 +575,29 @@ def launch_interactive_console(framework: ExploitFramework):
             console.print(f"[green]{result['output']}[/]")
         else:
             console.print(f"[red]Échec: {result.get('output', '')}[/]")
+    async def bypass_2fa_command(self, args):
+        if not args:
+            console.print("[red]Usage: bypass_2fa <action> [options][/]")
+            console.print("Actions: detect, replay, generate_token, extract_cookies, refresh_oauth, test_mobile_endpoints, start_long_trail, stop_long_trail, list_tokens")
+            console.print("  bypass_2fa detect   (utilise la session courante)")
+            console.print("  bypass_2fa replay")
+            console.print("  bypass_2fa generate_token")
+            return
+
+        action = args[0]
+        sess = self.current_session
+        if not sess:
+            console.print("[red]Aucune session active[/]")
+            return
+
+        # On utilise le secret stocké dans la session (si disponible)
+        # Il faudrait que la console ait accès au Validated associé à la session
+        # Pour simplifier, on passe la session au plugin et on lui laisse extraire le secret
+        from bxp_secretsonar.plugins.post_exploit.bypass_2fa import Bypass2FA
+        plugin = Bypass2FA()
+        options = {"action": action}
+        result = plugin.run(sess, options)
+        if result.get("success"):
+            console.print(f"[green]{result['output']}[/]")
+        else:
+            console.print(f"[red]{result.get('output', 'Échec')}[/]")

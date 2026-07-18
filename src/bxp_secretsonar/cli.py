@@ -19,9 +19,10 @@ def cli():
 @click.option('--min-impact', type=click.Choice(['low', 'medium', 'high', 'critical']), default='low', help='Impact minimum requis')
 @click.option('--honeypot-threshold', type=float, default=0.5, help='Score honeypot max avant de refuser l\'exploitation')
 @click.option('--deep', is_flag=True, help='Active le DeepScan (analyse JS, headers, robots.txt, etc.)')
+@click.option('--allow-private', is_flag=True, help='Autorise le scan d\'IPs privées et locales (désactive la protection SSRF)')
 @click.option('--inject', is_flag=True, help='Active l\'injection active de paramètres debug/erreurs')
 @click.option('--console-after', is_flag=True, help='Launch interactive console after scan with obtained sessions')
-def scan(target, exploit, authorized, strategy, console_after, min_confidence, min_impact, honeypot_threshold, deep, inject):
+def scan(target, exploit, authorized, strategy, console_after, min_confidence, min_impact, honeypot_threshold, deep, inject, allow_private):
     """Run SecretSonar with optional exploitation."""
     if exploit and not authorized:
         console.print("[bold red]ERROR: Exploitation requires --authorized flag. Aborting.[/]")
@@ -29,6 +30,7 @@ def scan(target, exploit, authorized, strategy, console_after, min_confidence, m
 
     engine = SecretSonarEngine()
     engine.deep_scan = deep
+    engine.allow_private = allow_private
     if inject:
         engine.injector = ParamInjector(ssl_verify=engine.env.ssl_verify)
     engine.min_confidence = min_confidence
@@ -95,6 +97,27 @@ def discover(query, provider, limit, scan):
         console.print("\n[+] Lancement du scan sur les cibles...")
         engine = SecretSonarEngine()
         asyncio.run(engine.run(urls))
+
+
+@cli.command()
+@click.option('--interval', '-i', default=12, help='Intervalle en heures entre les cycles')
+@click.option('--queries', '-q', default='queries.txt', help='Fichier de requêtes (une par ligne)')
+@click.option('--output', '-o', default='reports', help='Dossier de sortie des rapports')
+@click.option('--allow-private', is_flag=True, help='Autorise les IPs privées')
+@click.option('--auto-exploit', is_flag=True, help='Exploitation automatique (nécessite --authorized implicite)')
+@click.option('--auto-persist', is_flag=True, help='Persistance automatique après exploitation réussie')
+def daemon(interval, queries, output, allow_private, auto_exploit, auto_persist):
+    """Démarre le daemon avec planification et actions continues."""
+    from bxp_secretsonar.daemon import SecretSonarDaemon
+    d = SecretSonarDaemon(
+        queries_file=queries,
+        interval_hours=interval,
+        allow_private=allow_private,
+        output_dir=output,
+        auto_exploit=auto_exploit,
+        auto_persist=auto_persist
+    )
+    d.start()
 
 if __name__ == '__main__':
     cli()

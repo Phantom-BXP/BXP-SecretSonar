@@ -47,6 +47,7 @@ class SecretSonarEngine:
         self.env = EnvironmentProfile()
         self.queue = PriorityAsyncQueue(maxsize=self.env.max_concurrency * 5)
         self.deep_scan = False
+        self.allow_private = False  # désactive la protection SSRF si True
         self.injector = None
         if self.deep_scan:
             self.collector = DeepCollector(ssl_verify=self.env.ssl_verify, max_concurrency=self.env.max_concurrency)

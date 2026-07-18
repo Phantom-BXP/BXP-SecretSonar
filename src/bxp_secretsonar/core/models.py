@@ -32,6 +32,7 @@ class Evidence(BaseModel):
     context_before: str = ""
     context_after: str = ""
     entropy_score: float = 0.0
+    metadata: dict = Field(default_factory=dict)
     detected_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
