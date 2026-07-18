@@ -25,6 +25,31 @@ class Artifact(BaseModel):
         return hashlib.sha256(self.content.encode()).hexdigest()[:16]
 
 
+
+class PatternName(str, Enum):
+    generic_api_key = "generic_api_key"
+    bearer_token = "bearer_token"
+    aws_access_key = "aws_access_key"
+    stripe_key = "stripe_key"
+    github_token = "github_token"
+    gitlab_token = "gitlab_token"
+    slack_token = "slack_token"
+    discord_token = "discord_token"
+    paypal_secret = "paypal_secret"
+    twilio_sid = "twilio_sid"
+    twilio_token = "twilio_token"
+    gcp_api_key = "gcp_api_key"
+    heroku_api_key = "heroku_api_key"
+    sendgrid_api_key = "sendgrid_api_key"
+    mailgun_api_key = "mailgun_api_key"
+    atlassian_api_token = "atlassian_api_token"
+    shopify_access_token = "shopify_access_token"
+    openai_api_key = "openai_api_key"
+    anthropic_api_key = "anthropic_api_key"
+    revolut_token = "revolut_token"
+    twitch_token = "twitch_token"
+
+
 class Evidence(BaseModel):
     artifact_id: str
     pattern_name: str

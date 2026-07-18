@@ -51,7 +51,7 @@ def scan(target, exploit, authorized, strategy, console_after, min_confidence, m
         console.print(f"[green]{len(engine.framework.sessions)} session(s) exploitable(s) disponibles.[/]")
         fd, path = tempfile.mkstemp(suffix=".session")
         with os.fdopen(fd, 'wb') as f:
-            pickle.dump(engine.framework, f)
+            f.write(engine.framework.model_dump_json(indent=2))
         console.print("[dim]Lancement de la console interactive...[/]")
         from bxp_secretsonar.console.interactive import launch_interactive_console
         launch_interactive_console(engine.framework)
@@ -71,9 +71,8 @@ def console_cmd(authorized, load_sessions):
     from bxp_secretsonar.console.interactive import launch_interactive_console
 
     if load_sessions:
-        import pickle
-        with open(load_sessions, 'rb') as f:
-            fw = pickle.load(f)
+                with open(load_sessions, 'rb') as f:
+            fw = ExploitFramework.model_validate_json(f.read())
         console.print(f"[green]Sessions chargées depuis {load_sessions}[/]")
     else:
         fw = ExploitFramework(authorized=True)
