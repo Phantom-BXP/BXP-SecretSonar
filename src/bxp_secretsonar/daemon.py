@@ -49,6 +49,8 @@ class SecretSonarDaemon:
     async def _run_cycle(self):
         """Un cycle complet : découverte, scan, exploitation, persistance."""
         print(f"\n[{datetime.now()}] Début d'un cycle daemon...")
+        # Rotation de profil furtif pour chaque cycle
+        self.engine.stealth_mgr.rotate_profile('smart')
         queries = self._load_queries()
         if not queries:
             print("Aucune requête à exécuter.")

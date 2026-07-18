@@ -48,14 +48,15 @@ class SecretSonarEngine:
         self.env = EnvironmentProfile()
         self.queue = PriorityAsyncQueue(maxsize=self.env.max_concurrency * 5)
         self.deep_scan = False
+        self.proxy = None  # URL de proxy (socks5://host:port)
         self.stealth_mgr = StealthManager()  # gestionnaire de furtivité
         self.allow_private = False  # désactive la protection SSRF si True
         self.injector = None
         if self.deep_scan:
-            self.collector = DeepCollector(ssl_verify=self.env.ssl_verify, max_concurrency=self.env.max_concurrency)
+            self.collector = DeepCollector(ssl_verify=self.env.ssl_verify, max_concurrency=self.env.max_concurrency, proxy=self.proxy)
         else:
-            self.collector = HttpCollector(ssl_verify=self.env.ssl_verify, max_concurrency=self.env.max_concurrency)
-        self.validator_generic = GenericHttpValidator(ssl_verify=self.env.ssl_verify, timeout=5.0)
+            self.collector = HttpCollector(ssl_verify=self.env.ssl_verify, max_concurrency=self.env.max_concurrency, proxy=self.proxy)
+        self.validator_generic = GenericHttpValidator(ssl_verify=self.env.ssl_verify, timeout=5.0, proxy=self.proxy)
         self.validator_aws = AWSValidator(ssl_verify=self.env.ssl_verify, timeout=5.0)
         self.validator_stripe = StripeValidator(ssl_verify=self.env.ssl_verify, timeout=5.0)
         self.validator_paypal = PayPalValidator(ssl_verify=self.env.ssl_verify, timeout=5.0)

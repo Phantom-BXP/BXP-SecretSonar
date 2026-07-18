@@ -33,10 +33,11 @@ VALID_PATTERNS = [
 ]
 
 class GenericHttpValidator:
-    def __init__(self, ssl_verify: bool = True, timeout: float = 5.0, stealth_mgr: StealthManager = None):
+    def __init__(self, ssl_verify: bool = True, timeout: float = 5.0, stealth_mgr: StealthManager = None, proxy: str = None):
         self.ssl_verify = ssl_verify
         self.timeout = timeout
         self.stealth_mgr = stealth_mgr or StealthManager()
+        self.proxy = proxy
 
     async def validate(self, candidate: Candidate) -> Validated:
         pattern = candidate.evidence.pattern_name.lower()
@@ -57,8 +58,9 @@ class GenericHttpValidator:
         url = candidate.evidence.source_url or "http://example.com"
 
         try:
-            async with httpx.AsyncClient(verify=self.ssl_verify, timeout=self.timeout, headers=headers) as client:
+            async with httpx.AsyncClient(verify=self.ssl_verify, timeout=self.timeout, headers=headers, proxy=self.proxy) as client:
                 resp = await client.get(url)
+                self.stealth_mgr.record_request(resp.status_code == 200)
                 if resp.status_code == 200:
                     return Validated(
                         candidate=candidate,
