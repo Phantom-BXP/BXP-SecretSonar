@@ -119,6 +119,47 @@ def daemon(interval, queries, output, allow_private, auto_exploit, auto_persist)
     )
     d.start()
 
+
+@cli.command()
+@click.argument('action', type=click.Choice(['list', 'use', 'create', 'delete']))
+@click.option('--name', '-n', help='Nom du profil')
+@click.option('--config', '-c', help='Configuration JSON du profil (pour create)')
+def stealth(action, name, config):
+    """Gère les profils de furtivité (stealth)."""
+    from bxp_secretsonar.utils.stealth import StealthManager
+    sm = StealthManager()
+    if action == "list":
+        print(sm.list_profiles())
+    elif action == "use":
+        if not name:
+            print("Usage: stealth use --name <profil>")
+            return
+        if sm.use_profile(name):
+            print(f"Profil actif : {name}")
+        else:
+            print(f"Profil {name} introuvable")
+    elif action == "create":
+        if not name or not config:
+            print("Usage: stealth create --name <profil> --config '<json>'")
+            return
+        import json
+        try:
+            cfg = json.loads(config)
+            if sm.create_profile(name, cfg):
+                print(f"Profil {name} créé")
+            else:
+                print(f"Le profil {name} existe déjà")
+        except json.JSONDecodeError:
+            print("Configuration JSON invalide")
+    elif action == "delete":
+        if not name:
+            print("Usage: stealth delete --name <profil>")
+            return
+        if sm.delete_profile(name):
+            print(f"Profil {name} supprimé")
+        else:
+            print(f"Impossible de supprimer {name}")
+
 if __name__ == '__main__':
     cli()
 

@@ -1,74 +1,85 @@
 import httpx
 from bxp_secretsonar.core.models import Candidate, Validated, ValidationResult
+from bxp_secretsonar.utils.stealth import StealthManager
 
-# Endpoints de validation connus par type de secret
-VALIDATION_ENDPOINTS = {
-    "generic_api_key": [
-        {"url": "https://api.github.com/user", "header": "Authorization", "prefix": "token ", "success_codes": [200]},
-        {"url": "https://api.openai.com/v1/models", "header": "Authorization", "prefix": "Bearer ", "success_codes": [200]},
-    ],
-    "bearer_token": [
-        {"url": "https://api.github.com/user", "header": "Authorization", "prefix": "Bearer ", "success_codes": [200]},
-    ],
-}
-
-# Patterns qui ne supportent PAS la validation active
-NON_VALIDABLE_PATTERNS = {"private_key_header", "aws_access_key"}
-
+# Patterns pour lesquels une validation HTTP générique est autorisée.
+VALID_PATTERNS = [
+    "generic_api_key",
+    "bearer_token",
+    "api_key",
+    "auth_token",
+    "access_token",
+    "secret_key",
+    "aws_access_key",
+    "aws_secret_key",
+    "stripe_key",
+    "github_token",
+    "gitlab_token",
+    "slack_token",
+    "discord_token",
+    "paypal_secret",
+    "twilio_sid",
+    "twilio_token",
+    "gcp_api_key",
+    "heroku_api_key",
+    "sendgrid_api_key",
+    "mailgun_api_key",
+    "atlassian_api_token",
+    "shopify_access_token",
+    "openai_api_key",
+    "anthropic_api_key",
+    "revolut_token",
+    "twitch_token",
+]
 
 class GenericHttpValidator:
-    """Validateur actif générique avec timeout strict et SSL adaptatif."""
-
-    def __init__(self, ssl_verify: bool = True, timeout: float = 5.0):
+    def __init__(self, ssl_verify: bool = True, timeout: float = 5.0, stealth_mgr: StealthManager = None):
         self.ssl_verify = ssl_verify
         self.timeout = timeout
+        self.stealth_mgr = stealth_mgr or StealthManager()
 
     async def validate(self, candidate: Candidate) -> Validated:
-        pattern = candidate.evidence.pattern_name
-
-        # Skip non-validable patterns
-        if pattern in NON_VALIDABLE_PATTERNS:
+        pattern = candidate.evidence.pattern_name.lower()
+        
+        # Filtre défensif : ne valider que les patterns autorisés
+        if pattern not in VALID_PATTERNS:
             return Validated(
                 candidate=candidate,
                 result=ValidationResult.UNKNOWN,
-                proof=f"Pattern '{pattern}' not actively validated",
                 validator_name="generic_http",
+                proof=f"Pattern '{candidate.evidence.pattern_name}' non validé (hors liste ou exclu)"
             )
 
-        endpoints = VALIDATION_ENDPOINTS.get(pattern, [])
-        if not endpoints:
+        # Validation HTTP basique
+        headers = self.stealth_mgr.get_headers("generic")
+        secret = candidate.evidence.matched_value
+        headers["Authorization"] = f"Bearer {secret}"
+        url = candidate.evidence.source_url or "http://example.com"
+
+        try:
+            async with httpx.AsyncClient(verify=self.ssl_verify, timeout=self.timeout, headers=headers) as client:
+                resp = await client.get(url)
+                if resp.status_code == 200:
+                    return Validated(
+                        candidate=candidate,
+                        result=ValidationResult.CONFIRMED,
+                        validator_name="generic_http"
+                    )
+                elif resp.status_code in (401, 403):
+                    return Validated(
+                        candidate=candidate,
+                        result=ValidationResult.REJECTED,
+                        validator_name="generic_http"
+                    )
+                else:
+                    return Validated(
+                        candidate=candidate,
+                        result=ValidationResult.UNKNOWN,
+                        validator_name="generic_http"
+                    )
+        except Exception:
             return Validated(
                 candidate=candidate,
                 result=ValidationResult.UNKNOWN,
-                proof="No validation endpoint configured",
-                validator_name="generic_http",
+                validator_name="generic_http"
             )
-
-        async with httpx.AsyncClient(verify=self.ssl_verify, timeout=self.timeout) as client:
-            for ep in endpoints:
-                try:
-                    headers = {ep["header"]: f"{ep['prefix']}{candidate.evidence.matched_value}"}
-                    resp = await client.get(ep["url"], headers=headers)
-                    if resp.status_code in ep["success_codes"]:
-                        return Validated(
-                            candidate=candidate,
-                            result=ValidationResult.CONFIRMED,
-                            proof=f"HTTP {resp.status_code} from {ep['url']}",
-                            validator_name="generic_http",
-                        )
-                    elif resp.status_code in (401, 403):
-                        return Validated(
-                            candidate=candidate,
-                            result=ValidationResult.REJECTED,
-                            proof=f"HTTP {resp.status_code} from {ep['url']}",
-                            validator_name="generic_http",
-                        )
-                except Exception as e:
-                    continue  # Try next endpoint
-
-        return Validated(
-            candidate=candidate,
-            result=ValidationResult.UNKNOWN,
-            proof="All validation endpoints failed or inconclusive",
-            validator_name="generic_http",
-        )

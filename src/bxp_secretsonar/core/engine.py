@@ -28,6 +28,7 @@ from bxp_secretsonar.validators.sendgrid_validator import SendGridValidator
 from bxp_secretsonar.validators.mailgun_validator import MailgunValidator
 from bxp_secretsonar.validators.atlassian_validator import AtlassianValidator
 from bxp_secretsonar.validators.shopify_validator import ShopifyValidator
+from bxp_secretsonar.utils.stealth import StealthManager
 from bxp_secretsonar.detectors.passive import analyze_passive
 from bxp_secretsonar.detectors.active import probe_behavior
 from bxp_secretsonar.detectors.scorer import compute_risk_score
@@ -47,6 +48,7 @@ class SecretSonarEngine:
         self.env = EnvironmentProfile()
         self.queue = PriorityAsyncQueue(maxsize=self.env.max_concurrency * 5)
         self.deep_scan = False
+        self.stealth_mgr = StealthManager()  # gestionnaire de furtivité
         self.allow_private = False  # désactive la protection SSRF si True
         self.injector = None
         if self.deep_scan:

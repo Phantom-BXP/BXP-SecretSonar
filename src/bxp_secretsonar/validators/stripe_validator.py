@@ -1,8 +1,12 @@
 import httpx
 from bxp_secretsonar.core.models import Candidate, Validated, ValidationResult
 from bxp_secretsonar.validators.generic_http import GenericHttpValidator
+from bxp_secretsonar.utils.stealth import StealthManager
 
 class StripeValidator(GenericHttpValidator):
+    def __init__(self, ssl_verify: bool = True, timeout: float = 5.0, stealth_mgr: StealthManager = None):
+        super().__init__(ssl_verify=ssl_verify, timeout=timeout, stealth_mgr=stealth_mgr)
+
     async def validate(self, candidate: Candidate) -> Validated:
         validated = await super().validate(candidate)
         if validated.result != ValidationResult.CONFIRMED:
@@ -11,18 +15,17 @@ class StripeValidator(GenericHttpValidator):
         metadata = validated.candidate.evidence.metadata
         score_boost = 0.0
 
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            headers = {"Authorization": f"Bearer {secret}"}
+        headers = self.stealth_mgr.get_headers("stripe")
+        headers.update({"Authorization": f"Bearer {secret}"})
 
-            # 1. Solde complet (toutes les devises)
+        async with httpx.AsyncClient(timeout=10.0, headers=headers) as client:
+            # 1. Solde
             try:
-                resp = await client.get("https://api.stripe.com/v1/balance", headers=headers)
+                resp = await client.get("https://api.stripe.com/v1/balance")
                 if resp.status_code == 200:
                     data = resp.json()
                     available = data.get("available", [])
-                    pending = data.get("pending", [])
                     metadata["stripe_balance_available"] = available
-                    metadata["stripe_balance_pending"] = pending
                     if available:
                         score_boost += 0.3
                 else:
@@ -33,37 +36,28 @@ class StripeValidator(GenericHttpValidator):
                 validated.candidate.confidence_score = max(0.1, validated.candidate.confidence_score - 0.1)
                 return validated
 
-            # 2. Détails du compte
+            # 2. Compte
             try:
-                resp = await client.get("https://api.stripe.com/v1/account", headers=headers)
+                resp = await client.get("https://api.stripe.com/v1/account")
                 if resp.status_code == 200:
                     data = resp.json()
                     metadata["stripe_account_id"] = data.get("id")
-                    metadata["stripe_email"] = data.get("email")
-                    metadata["stripe_country"] = data.get("country")
-                    metadata["stripe_type"] = data.get("type")  # standard, express, custom
                     score_boost += 0.2
             except Exception:
                 pass
 
-            # 3. Liste des abonnements (10 premiers)
+            # 3. Abonnements
             try:
-                resp = await client.get("https://api.stripe.com/v1/subscriptions?limit=10", headers=headers)
+                resp = await client.get("https://api.stripe.com/v1/subscriptions?limit=10")
                 if resp.status_code == 200:
                     data = resp.json()
                     subs = data.get("data", [])
                     metadata["stripe_subscriptions_count"] = len(subs)
-                    # Récupérer les IDs et statuts pour l'audit
-                    metadata["stripe_subscriptions"] = [
-                        {"id": s["id"], "status": s["status"], "plan": s.get("items", {}).get("data", [{}])[0].get("price", {}).get("id")}
-                        for s in subs
-                    ]
                     if subs:
                         score_boost += 0.1
             except Exception:
                 pass
 
-        # Ajouter le boost de confiance
         validated.candidate.confidence_score = min(1.0, validated.candidate.confidence_score + score_boost)
         validated.result = ValidationResult.CONFIRMED
         return validated

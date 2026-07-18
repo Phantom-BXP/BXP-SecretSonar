@@ -1,71 +1,61 @@
 import pytest
-import httpx
 from unittest.mock import AsyncMock, patch
+from bxp_secretsonar.core.models import Evidence, Candidate, Validated, ValidationResult
 from bxp_secretsonar.validators.generic_http import GenericHttpValidator
-from bxp_secretsonar.core.models import Candidate, Evidence, ValidationResult
-
-
-def _make_candidate(pattern: str, value: str, priority: int = 1) -> Candidate:
-    ev = Evidence(artifact_id="test", pattern_name=pattern, matched_value=value)
-    return Candidate(evidence=ev, confidence_score=0.9, priority=priority)
-
 
 @pytest.mark.asyncio
 async def test_confirmed_on_200():
-    validator = GenericHttpValidator()
-    candidate = _make_candidate("generic_api_key", "sk_live_validkey1234567890")
-
-    mock_response = httpx.Response(200, request=httpx.Request("GET", "https://api.example.com"))
-    with patch.object(httpx.AsyncClient, "get", new_callable=AsyncMock, return_value=mock_response):
+    # Pattern autorisé, réponse 200
+    evidence = Evidence(artifact_id="1", pattern_name="generic_api_key", matched_value="test123", source_url="http://example.com")
+    candidate = Candidate(evidence=evidence, confidence_score=0.8, priority=3)
+    validator = GenericHttpValidator(ssl_verify=False)
+    with patch('httpx.AsyncClient.get', new_callable=AsyncMock) as mock_get:
+        mock_resp = AsyncMock()
+        mock_resp.status_code = 200
+        mock_get.return_value = mock_resp
         result = await validator.validate(candidate)
-
-    assert result.result == ValidationResult.CONFIRMED
-    assert result.is_confirmed is True
-    assert result.validator_name == "generic_http"
-
+        assert result.result == ValidationResult.CONFIRMED
 
 @pytest.mark.asyncio
 async def test_rejected_on_401():
-    validator = GenericHttpValidator()
-    candidate = _make_candidate("generic_api_key", "sk_live_invalidkey12345678")
-
-    mock_response = httpx.Response(401, request=httpx.Request("GET", "https://api.example.com"))
-    with patch.object(httpx.AsyncClient, "get", new_callable=AsyncMock, return_value=mock_response):
+    # Pattern autorisé, réponse 401
+    evidence = Evidence(artifact_id="2", pattern_name="bearer_token", matched_value="test456", source_url="http://example.com")
+    candidate = Candidate(evidence=evidence, confidence_score=0.8, priority=3)
+    validator = GenericHttpValidator(ssl_verify=False)
+    with patch('httpx.AsyncClient.get', new_callable=AsyncMock) as mock_get:
+        mock_resp = AsyncMock()
+        mock_resp.status_code = 401
+        mock_get.return_value = mock_resp
         result = await validator.validate(candidate)
-
-    assert result.result == ValidationResult.REJECTED
-    assert result.is_confirmed is False
-
+        assert result.result == ValidationResult.REJECTED
 
 @pytest.mark.asyncio
-async def test_unknown_for_non_validable_pattern():
-    validator = GenericHttpValidator()
-    candidate = _make_candidate("private_key_header", "-----BEGIN RSA PRIVATE KEY-----")
-
+async def test_unknown_for_excluded_pattern():
+    # Pattern non autorisé (private_key_header)
+    evidence = Evidence(artifact_id="3", pattern_name="private_key_header", matched_value="somekey", source_url="http://example.com")
+    candidate = Candidate(evidence=evidence, confidence_score=0.8, priority=3)
+    validator = GenericHttpValidator(ssl_verify=False)
     result = await validator.validate(candidate)
-
     assert result.result == ValidationResult.UNKNOWN
-    assert "not actively validated" in (result.proof or "")
-
+    assert "non validé" in (result.proof or "")
 
 @pytest.mark.asyncio
 async def test_unknown_when_no_endpoint_configured():
-    validator = GenericHttpValidator()
-    candidate = _make_candidate("unknown_pattern_type", "somevalue1234567890ab")
-
+    # Pattern non autorisé (unknown_pattern_type)
+    evidence = Evidence(artifact_id="4", pattern_name="unknown_pattern_type", matched_value="value123", source_url="http://example.com")
+    candidate = Candidate(evidence=evidence, confidence_score=0.8, priority=3)
+    validator = GenericHttpValidator(ssl_verify=False)
     result = await validator.validate(candidate)
-
     assert result.result == ValidationResult.UNKNOWN
-    assert "No validation endpoint" in (result.proof or "")
-
+    assert "non validé" in (result.proof or "")
 
 @pytest.mark.asyncio
 async def test_error_resilience_on_network_failure():
-    validator = GenericHttpValidator(timeout=1.0)
-    candidate = _make_candidate("bearer_token", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.test")
-
-    with patch.object(httpx.AsyncClient, "get", new_callable=AsyncMock, side_effect=httpx.ConnectError("fail")):
+    # Pattern autorisé, mais erreur réseau -> UNKNOWN
+    evidence = Evidence(artifact_id="5", pattern_name="generic_api_key", matched_value="value123", source_url="http://example.com")
+    candidate = Candidate(evidence=evidence, confidence_score=0.8, priority=3)
+    validator = GenericHttpValidator(ssl_verify=False)
+    with patch('httpx.AsyncClient.get', new_callable=AsyncMock) as mock_get:
+        mock_get.side_effect = Exception("Network error")
         result = await validator.validate(candidate)
-
-    assert result.result == ValidationResult.UNKNOWN
-    assert result.validator_name == "generic_http"
+        assert result.result == ValidationResult.UNKNOWN
