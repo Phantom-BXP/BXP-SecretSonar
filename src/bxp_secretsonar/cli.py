@@ -131,6 +131,13 @@ def stealth(action, name, config):
     sm = StealthManager()
     if action == "healthcheck":
         import asyncio
+        if name == "--ab":
+            result = asyncio.run(sm.ab_test())
+        else:
+            result = asyncio.run(sm.health_check())
+        print(result)
+        return
+        import asyncio
         result = asyncio.run(sm.health_check())
         print(result)
         return

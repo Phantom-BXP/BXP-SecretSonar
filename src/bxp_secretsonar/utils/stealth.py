@@ -1,5 +1,10 @@
 import random, time, json, os
 from bxp_secretsonar.utils.tls import TLS_CLIENT_AVAILABLE, CURL_CFFI_AVAILABLE, TLSHealthCheck, TlsClientTransport, CurlCFFITransport
+try:
+    from bxp_secretsonar.utils.android_fallback import create_android_client, ANDROID_FALLBACK_AVAILABLE
+except ImportError:
+    ANDROID_FALLBACK_AVAILABLE = False
+    create_android_client = None
 from typing import Dict, List, Optional
 from dataclasses import dataclass, field
 
@@ -263,6 +268,14 @@ class StealthManager:
         fingerprint = profile.tls_fingerprint
         if not fingerprint:
             return None
+        # Fallback Android si tls_client non disponible
+        if not TLS_CLIENT_AVAILABLE and not CURL_CFFI_AVAILABLE:
+            import sys
+            if hasattr(sys, 'getandroidapilevel'):
+                # On est sur Android, utiliser le fallback requests
+                session = create_android_client(self.get_headers("android"))
+                # Wrapper pour le rendre compatible httpx (simplifié)
+                return AndroidRequestsTransport(session)
         if TLS_CLIENT_AVAILABLE:
             return TlsClientTransport(fingerprint)
         if CURL_CFFI_AVAILABLE:
@@ -350,3 +363,63 @@ class StealthManager:
                 pass
         except FileNotFoundError:
             pass  # pas de fichier de config, on garde les valeurs par défaut
+
+    async def ab_test(self, test_url: str = "https://httpbin.org/headers") -> str:
+        """Teste tous les backends disponibles et retourne le meilleur."""
+        import asyncio
+        candidates = []
+        if TLS_CLIENT_AVAILABLE:
+            candidates.append("tls_client")
+        if CURL_CFFI_AVAILABLE:
+            candidates.append("curl_cffi")
+        candidates.append("httpx")  # fallback toujours présent
+
+        scores = {}
+        for backend in candidates:
+            try:
+                client = self._create_backend_client(backend)
+                resp = await client.get(test_url, timeout=10.0)
+                if resp.status_code == 200:
+                    # Vérifier le JA3 généré (si possible)
+                    ja3_ok = True
+                    if backend != "httpx":
+                        from bxp_secretsonar.utils.tls import TLSHealthCheck
+                        ja3_ok = await TLSHealthCheck.validate_ja3(backend, self.profiles[self.active_profile].tls_fingerprint)
+                    scores[backend] = 1.0 if ja3_ok else 0.5
+                else:
+                    scores[backend] = 0.0
+                await client.aclose()
+            except Exception:
+                scores[backend] = 0.0
+
+        best = max(scores, key=scores.get)
+        self._preferred_backend = best
+        return f"Meilleur backend : {best} (scores: {scores})"
+
+    def _create_backend_client(self, backend: str):
+        """Crée un client HTTP spécifique à un backend (pour A/B testing)."""
+        import httpx
+        profile = self.profiles.get(self.active_profile, self.profiles["mobile_user"])
+        fingerprint = profile.tls_fingerprint
+        if backend == "tls_client":
+            from bxp_secretsonar.utils.tls import TlsClientTransport
+            transport = TlsClientTransport(fingerprint) if fingerprint else None
+        elif backend == "curl_cffi":
+            from bxp_secretsonar.utils.tls import CurlCFFITransport
+            transport = CurlCFFITransport(fingerprint) if fingerprint else None
+        else:
+            transport = None
+        return httpx.AsyncClient(transport=transport, headers=self.get_headers("ab_test"), timeout=10.0)
+
+class AndroidRequestsTransport:
+    """Transport httpx-like pour le fallback Android."""
+    def __init__(self, session):
+        self.session = session
+    async def get(self, url, **kwargs):
+        import asyncio
+        return await asyncio.to_thread(self.session.get, url, **kwargs)
+    async def post(self, url, **kwargs):
+        import asyncio
+        return await asyncio.to_thread(self.session.post, url, **kwargs)
+    async def aclose(self):
+        self.session.close()
