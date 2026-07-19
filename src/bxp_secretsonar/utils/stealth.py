@@ -281,7 +281,7 @@ class StealthManager:
             return True
         return False
 
-    def get_client(self, service: str = "generic"):
+    def get_client(self, service: str = "generic", **kwargs):
         """Retourne un client HTTP configuré avec le transport TLS approprié."""
         import httpx
         profile = self.profiles.get(self.active_profile, self.profiles["mobile_user"])
