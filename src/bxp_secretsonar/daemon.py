@@ -5,11 +5,13 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 from bxp_secretsonar.discovery.manager import DiscoveryManager
 from bxp_secretsonar.core.engine import SecretSonarEngine
+from bxp_secretsonar.core.decision import AutonomyLevel
 
 STATE_FILE = "daemon_state.json"
 
 class SecretSonarDaemon:
     def __init__(self, queries_file: str = "queries.txt", interval_hours: int = 12,
+                 autonomy_level: int = 0,
                  allow_private: bool = False, output_dir: str = "reports", 
                  auto_exploit: bool = False, auto_persist: bool = False):
         self.queries_file = queries_file
@@ -18,6 +20,7 @@ class SecretSonarDaemon:
         self.output_dir = output_dir
         self.auto_exploit = auto_exploit
         self.auto_persist = auto_persist
+        self.autonomy_level = autonomy_level
         self.scheduler = AsyncIOScheduler()
         self.engine = None
         self.discovery = DiscoveryManager()
@@ -81,6 +84,7 @@ class SecretSonarDaemon:
 
         # 2. Scan + exploitation
         self.engine = SecretSonarEngine()
+        self.engine.decision_engine.set_level(AutonomyLevel(self.autonomy_level))
         self.engine.allow_private = self.allow_private
         self.engine.deep_scan = True
         self.engine.injector = None  # Désactivé en mode daemon pour discrétion

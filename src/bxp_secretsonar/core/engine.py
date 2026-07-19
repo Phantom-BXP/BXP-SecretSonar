@@ -29,6 +29,7 @@ from bxp_secretsonar.validators.mailgun_validator import MailgunValidator
 from bxp_secretsonar.validators.atlassian_validator import AtlassianValidator
 from bxp_secretsonar.validators.shopify_validator import ShopifyValidator
 from bxp_secretsonar.utils.stealth import StealthManager
+from bxp_secretsonar.core.decision import DecisionEngine, AutonomyLevel
 from bxp_secretsonar.detectors.passive import analyze_passive
 from bxp_secretsonar.detectors.active import probe_behavior
 from bxp_secretsonar.detectors.scorer import compute_risk_score
@@ -50,6 +51,7 @@ class SecretSonarEngine:
         self.deep_scan = False
         self.proxy = None  # URL de proxy (socks5://host:port)
         self.stealth_mgr = StealthManager()  # gestionnaire de furtivité
+        self.decision_engine = DecisionEngine(level=AutonomyLevel.MANUAL)
         self.allow_private = False  # désactive la protection SSRF si True
         self.injector = None
         if self.deep_scan:
@@ -140,7 +142,13 @@ class SecretSonarEngine:
                     )
                     self._validated_results.append(validated)
 
-                    if self.framework:
+                if self.framework:
+                    decision = await self.decision_engine.decide(validated)
+                    if decision == "SKIP":
+                        console.print(f"[yellow][SKIP][/] Secret {validated.candidate.evidence.matched_value[:20]}... ignoré par le DecisionEngine")
+                    elif decision == "WAIT":
+                        console.print(f"[yellow][WAIT][/] Secret {validated.candidate.evidence.matched_value[:20]}... en attente (autonomie insuffisante)")
+                    elif decision == "EXECUTE":
                         try:
                             do_exploit = True
                             if validated.candidate.confidence_score < self.min_confidence:
@@ -158,6 +166,7 @@ class SecretSonarEngine:
                             else:
                                 console.print(f"[yellow][SKIP][/] Secret {validated.candidate.evidence.matched_value[:20]}... ignoré (scores insuffisants)")
                         except Exception as ex:
+                            console.print(f"[red]Exploit error: {ex}[/]")
                             console.print(f"[red]Exploit error: {ex}[/]")
         except Exception as e:
             console.print(f"[red]❌ Error processing {url}: {e}[/]")

@@ -1,6 +1,7 @@
 import asyncio, click, pickle, os, tempfile
 from rich.console import Console
 from bxp_secretsonar.core.engine import SecretSonarEngine
+from bxp_secretsonar.core.decision import AutonomyLevel
 from bxp_secretsonar.injectors.param_injector import ParamInjector
 from bxp_secretsonar.exploit.framework import ExploitFramework
 
@@ -19,11 +20,12 @@ def cli():
 @click.option('--min-impact', type=click.Choice(['low', 'medium', 'high', 'critical']), default='low', help='Impact minimum requis')
 @click.option('--honeypot-threshold', type=float, default=0.5, help='Score honeypot max avant de refuser l\'exploitation')
 @click.option('--deep', is_flag=True, help='Active le DeepScan (analyse JS, headers, robots.txt, etc.)')
+@click.option('--autonomy', type=click.IntRange(0, 5), default=0, help='Niveau d\'autonomie (0=manuel, 5=full auto)')
 @click.option('--allow-private', is_flag=True, help='Autorise le scan d\'IPs privées et locales (désactive la protection SSRF)')
 @click.option('--proxy', help='URL du proxy (ex: socks5://localhost:1080)')
 @click.option('--inject', is_flag=True, help='Active l\'injection active de paramètres debug/erreurs')
 @click.option('--console-after', is_flag=True, help='Launch interactive console after scan with obtained sessions')
-def scan(target, exploit, authorized, strategy, console_after, min_confidence, min_impact, honeypot_threshold, deep, inject, allow_private, proxy):
+def scan(target, exploit, authorized, strategy, console_after, min_confidence, min_impact, honeypot_threshold, deep, inject, allow_private, proxy, autonomy):
     """Run SecretSonar with optional exploitation."""
     if exploit and not authorized:
         console.print("[bold red]ERROR: Exploitation requires --authorized flag. Aborting.[/]")
@@ -31,6 +33,7 @@ def scan(target, exploit, authorized, strategy, console_after, min_confidence, m
 
     engine = SecretSonarEngine()
     engine.deep_scan = deep
+    engine.decision_engine.set_level(AutonomyLevel(autonomy))
     engine.proxy = proxy
     engine.allow_private = allow_private
     if inject:
@@ -199,6 +202,15 @@ def setup(offline):
         print("Terminé. Relancez BXP‑SecretSonar pour utiliser les nouveaux backends TLS.")
     else:
         print("Aucune option spécifiée. Utilisez --offline pour l'installation hors ligne.")
+
+
+@cli.command()
+@click.argument('level', type=click.IntRange(0, 5))
+def autonomy(level):
+    """Configure le niveau d'autonomie (0=manuel, 5=full auto)."""
+    names = {0: "MANUAL", 1: "DISCOVERY_AUTO", 2: "LOW_IMPACT_AUTO", 3: "SAFE_EXPLOIT_AUTO", 4: "ROLLBACK_AUTO", 5: "FULL_AUTO"}
+    print(f"Niveau d'autonomie configuré : {level} ({names[level]})")
+    print("Utilisez cette valeur avec --autonomy dans le daemon ou la commande scan.")
 
 if __name__ == '__main__':
     cli()
