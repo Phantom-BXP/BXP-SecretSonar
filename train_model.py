@@ -1,173 +1,205 @@
 #!/usr/bin/env python3
 """
-Script d'entraînement du modèle ML de détection de honeypots pour BXP-SecretSonar.
-Utilise un RandomForestClassifier avec export ONNX et coefficients JSON.
+Script d'entraînement du modèle ML de détection de honeypots (v2).
+Ajoute : calibration, validation croisée, permutation importance, feature engineering.
 """
-import os, sys, json, logging, warnings
+import os, sys, json, logging, hashlib
+from datetime import datetime
 import numpy as np
 import pandas as pd
 
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 logger = logging.getLogger(__name__)
 
-# Paramètres par défaut (écrasés par train_config.yaml si présent)
-DEFAULT_CONFIG = {
-    "model": {
-        "n_estimators": 100,
-        "max_depth": 8,
-        "test_size": 0.2,
-        "random_state": 42,
-    },
-    "output": {
-        "model_dir": "models/",
-        "model_name": "honeypot_rf",
-    },
-}
+# ---------- Feature engineering ----------
+def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
+    """Ajoute des features dérivées au DataFrame."""
+    df = df.copy()
+    df['scripts_per_form'] = df['num_scripts'] / df['num_forms'].clip(lower=1)
+    df['input_per_form'] = df['num_inputs'] / df['num_forms'].clip(lower=1)
+    df['response_time_ratio'] = df['response_time_ms'] / df['timing_variance'].clip(lower=0.001)
+    # header_entropy sera calculée plus tard si nécessaire (placeholder)
+    df['header_entropy'] = 0.0  # placeholder, à remplacer par un vrai calcul
+    return df
 
-def load_config(config_path: str = "train_config.yaml") -> dict:
-    try:
-        import yaml
-        with open(config_path) as f:
-            config = yaml.safe_load(f)
-        return {**DEFAULT_CONFIG, **config}
-    except ImportError:
-        logger.warning("pyyaml non installé, utilisation des paramètres par défaut.")
-        return DEFAULT_CONFIG
-    except FileNotFoundError:
-        logger.warning(f"{config_path} introuvable, utilisation des paramètres par défaut.")
-        return DEFAULT_CONFIG
+# ---------- Data augmentation ----------
+def augment_minority(X, y, minority_class=1, n_synthetic=100):
+    """Génère des échantillons synthétiques pour la classe minoritaire."""
+    from sklearn.neighbors import NearestNeighbors
+    X_min = X[y == minority_class]
+    if len(X_min) < 5:
+        logger.warning("Pas assez d'échantillons minoritaires pour l'augmentation.")
+        return X, y
+    neigh = NearestNeighbors(n_neighbors=min(5, len(X_min)))
+    neigh.fit(X_min)
+    synthetic = []
+    for _ in range(n_synthetic):
+        idx = np.random.randint(0, len(X_min))
+        sample = X_min[idx].reshape(1, -1)
+        neighbors = neigh.kneighbors(sample, return_distance=False)
+        neighbor_idx = np.random.choice(neighbors[0][1:])
+        neighbor = X_min[neighbor_idx].reshape(1, -1)
+        new_sample = sample + np.random.random() * (neighbor - sample)
+        synthetic.append(new_sample[0])
+    X_aug = np.vstack([X, np.array(synthetic)])
+    y_aug = np.hstack([y, np.full(n_synthetic, minority_class)])
+    return X_aug, y_aug
 
+# ---------- Modèle avec calibration ----------
+def train_with_cv(X, y, config):
+    from sklearn.ensemble import RandomForestClassifier
+    from sklearn.calibration import CalibratedClassifierCV
+    from sklearn.model_selection import StratifiedKFold, cross_validate
+    from sklearn.inspection import permutation_importance
+    from sklearn.metrics import roc_auc_score
+
+    # Données d'entraînement et hold-out pour permutation importance
+    from sklearn.model_selection import train_test_split
+    X_train, X_holdout, y_train, y_holdout = train_test_split(
+        X, y, test_size=0.1, random_state=config["random_state"], stratify=y
+    )
+
+    # Validation croisée stratifiée
+    cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=config["random_state"])
+    rf = RandomForestClassifier(
+        n_estimators=config.get("n_estimators", 50),
+        max_depth=config.get("max_depth", 5),
+        min_samples_leaf=config.get("min_samples_leaf", 10),
+        class_weight='balanced',
+        random_state=config["random_state"],
+        n_jobs=-1
+    )
+
+    scores = cross_validate(rf, X_train, y_train, cv=cv,
+                            scoring=['accuracy', 'precision', 'recall', 'f1', 'roc_auc'],
+                            return_train_score=False)
+
+    # Moyennes et écarts-types
+    metrics = {}
+    for metric in ['accuracy', 'precision', 'recall', 'f1', 'roc_auc']:
+        key = f'test_{metric}'
+        metrics[metric] = {
+            "mean": float(scores[key].mean()),
+            "std": float(scores[key].std())
+        }
+    logger.info(f"Métriques (CV 5-fold) : {json.dumps(metrics, indent=2)}")
+
+    # Entraînement final sur toutes les données d'entraînement
+    rf.fit(X_train, y_train)
+
+    # Calibration
+    calibrated = CalibratedClassifierCV(rf, method='isotonic', cv=3)
+    calibrated.fit(X_train, y_train)
+    logger.info("Modèle calibré (isotonic).")
+
+    # Permutation importance sur le hold-out set
+    perm_importance = permutation_importance(
+        calibrated, X_holdout, y_holdout,
+        n_repeats=20, random_state=config["random_state"],
+        scoring='f1'
+    )
+
+    # Noms des features (incluant les features dérivées)
+    feature_names = config.get("feature_names", [f"f{i}" for i in range(X.shape[1])])
+    importance_dict = {
+        name: float(perm_importance.importances_mean[i])
+        for i, name in enumerate(feature_names)
+    }
+
+    return calibrated, metrics, importance_dict, cv
+
+# ---------- Main ----------
 def main():
     import argparse
-    from sklearn.ensemble import RandomForestClassifier
-    from sklearn.impute import SimpleImputer
-    from sklearn.preprocessing import StandardScaler
-    from sklearn.pipeline import Pipeline
-    from sklearn.model_selection import train_test_split
-    from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score, classification_report
-
-    parser = argparse.ArgumentParser(description="Entraîne un modèle de détection de honeypots.")
+    parser = argparse.ArgumentParser(description="Entraîne un modèle de détection de honeypots (v2).")
     parser.add_argument("--dataset", required=True, help="Chemin vers le CSV d'entraînement.")
     parser.add_argument("--config", default="train_config.yaml", help="Fichier de configuration YAML.")
+    parser.add_argument("--output", default="models/", help="Dossier de sortie des modèles.")
     args = parser.parse_args()
 
-    config = load_config(args.config)
-    model_dir = config["output"]["model_dir"]
-    model_name = config["output"]["model_name"]
-    os.makedirs(model_dir, exist_ok=True)
+    # Chargement config
+    config = {
+        "n_estimators": 50,
+        "max_depth": 5,
+        "min_samples_leaf": 10,
+        "random_state": 42,
+        "test_size": 0.2,
+        "feature_names": [
+            "response_time_ms", "content_length", "num_forms", "num_inputs",
+            "num_scripts", "has_honeypot_keywords", "has_fake_error",
+            "timing_variance", "missing_standard_headers", "incompatible_headers",
+            "scripts_per_form", "input_per_form", "response_time_ratio", "header_entropy"
+        ]
+    }
+    if os.path.exists(args.config):
+        import yaml
+        with open(args.config) as f:
+            config.update(yaml.safe_load(f).get("model", {}))
 
-    # Chargement des données
+    # Chargement données
     logger.info(f"Chargement de {args.dataset}...")
     df = pd.read_csv(args.dataset)
     if 'label' not in df.columns:
-        logger.error("Le CSV doit contenir une colonne 'label' (0=légitime, 1=honeypot).")
+        logger.error("Le CSV doit contenir une colonne 'label'.")
         sys.exit(1)
 
-    # Features et labels
-    feature_cols = [
-        "response_time_ms", "content_length", "num_forms", "num_inputs",
-        "num_scripts", "has_honeypot_keywords", "has_fake_error",
-        "timing_variance", "missing_standard_headers", "incompatible_headers"
-    ]
-    # Vérifier que toutes les colonnes de features existent
+    # Feature engineering
+    df = engineer_features(df)
+    feature_cols = config["feature_names"]
     missing = [c for c in feature_cols if c not in df.columns]
     if missing:
-        logger.error(f"Colonnes manquantes dans le CSV : {missing}")
+        logger.error(f"Colonnes manquantes : {missing}")
         sys.exit(1)
 
     X = df[feature_cols].values
     y = df['label'].values
 
-    # Préprocessing
-    numeric_features = ["response_time_ms", "content_length", "num_forms", "num_inputs",
-                        "num_scripts", "timing_variance"]
-    numeric_indices = [feature_cols.index(c) for c in numeric_features if c in feature_cols]
-    bool_features = ["has_honeypot_keywords", "has_fake_error", "missing_standard_headers",
-                     "incompatible_headers"]
-    bool_indices = [feature_cols.index(c) for c in bool_features if c in feature_cols]
+    # Prétraitement : imputation (si valeurs manquantes)
+    from sklearn.impute import SimpleImputer
+    imputer = SimpleImputer(strategy="median")
+    X = imputer.fit_transform(X)
 
-    # Pipeline avec imputation et scaling
-    preprocessor = Pipeline([
-        ("imputer_num", SimpleImputer(strategy="median")),
-        ("scaler", StandardScaler(with_mean=False))  # with_mean=False pour les sparse matrices
-    ])
+    # Augmentation si déséquilibre
+    unique, counts = np.unique(y, return_counts=True)
+    class_counts = dict(zip(unique, counts))
+    if class_counts.get(1, 0) < 100:
+        logger.info(f"Augmentation de la classe honeypot (n={class_counts.get(1, 0)})...")
+        X, y = augment_minority(X, y, minority_class=1, n_synthetic=100)
 
-    # Imputation séparée pour les booléens (most_frequent)
-    if bool_indices:
-        imputer_bool = SimpleImputer(strategy="most_frequent")
-        X[:, bool_indices] = imputer_bool.fit_transform(X[:, bool_indices])
+    # Entraînement avec CV
+    model, metrics, importance, cv = train_with_cv(X, y, config)
 
-    # Appliquer le scaling seulement sur les numériques
-    if numeric_indices:
-        X_num = X[:, numeric_indices]
-        X_num = preprocessor.fit_transform(X_num)
-        X[:, numeric_indices] = X_num
+    # Sauvegarde
+    os.makedirs(args.output, exist_ok=True)
+    model_name = f"honeypot_rf_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
-    # Split stratifié
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=config["model"]["test_size"],
-        random_state=config["model"]["random_state"], stratify=y
-    )
-    logger.info(f"Train: {X_train.shape[0]}, Test: {X_test.shape[0]}")
-
-    # Entraînement
-    logger.info("Entraînement du RandomForestClassifier...")
-    model = RandomForestClassifier(
-        n_estimators=config["model"]["n_estimators"],
-        max_depth=config["model"]["max_depth"],
-        class_weight='balanced',
-        random_state=config["model"]["random_state"],
-        n_jobs=-1
-    )
-    model.fit(X_train, y_train)
-
-    # Évaluation
-    y_pred = model.predict(X_test)
-    y_proba = model.predict_proba(X_test)[:, 1]
-
-    metrics = {
-        "accuracy": accuracy_score(y_test, y_pred),
-        "precision": precision_score(y_test, y_pred, zero_division=0),
-        "recall": recall_score(y_test, y_pred),
-        "f1_score": f1_score(y_test, y_pred),
-        "auc_roc": roc_auc_score(y_test, y_proba),
-    }
-    logger.info(f"Métriques : {json.dumps(metrics, indent=2)}")
-
-    feature_importance = dict(zip(feature_cols, model.feature_importances_.tolist()))
+    # Rapport JSON
     report = {
-        **metrics,
-        "feature_importance": feature_importance,
-        "config": config["model"],
+        "metrics": metrics,
+        "feature_importance": importance,
+        "config": config,
+        "cv_folds": cv.get_n_splits(),
     }
-
-    # Sauvegarde du rapport
-    report_path = os.path.join(model_dir, f"{model_name}_report.json")
-    with open(report_path, 'w') as f:
+    with open(os.path.join(args.output, f"{model_name}_report.json"), 'w') as f:
         json.dump(report, f, indent=2)
-    logger.info(f"Rapport sauvegardé : {report_path}")
 
-    # Export ONNX
+    # Modèle ONNX
     try:
-        import skl2onnx
         from skl2onnx import convert_sklearn
         from skl2onnx.common.data_types import FloatTensorType
-
-        # Forcer float32 pour ONNX
-        X_sample = X_train[:1].astype(np.float32)
-        initial_type = [('float_input', FloatTensorType([None, X_train.shape[1]]))]
+        X_sample = X[:1].astype(np.float32)
+        initial_type = [('float_input', FloatTensorType([None, X.shape[1]]))]
         onnx_model = convert_sklearn(model, initial_types=initial_type)
-
-        onnx_path = os.path.join(model_dir, f"{model_name}.onnx")
+        onnx_path = os.path.join(args.output, f"{model_name}.onnx")
         with open(onnx_path, "wb") as f:
             f.write(onnx_model.SerializeToString())
-        logger.info(f"Modèle ONNX exporté : {onnx_path}")
+        logger.info(f"ONNX exporté : {onnx_path}")
     except ImportError:
         logger.warning("skl2onnx non installé, export ONNX ignoré.")
     except Exception as e:
-        logger.warning(f"Échec de l'export ONNX : {e}")
+        logger.warning(f"Échec export ONNX : {e}")
 
-    # Export coefficients JSON (fallback Python pur)
+    # Coefficients JSON (fallback Python pur)
     coefficients = {
         "feature_order": feature_cols,
         "n_classes": model.n_classes_,
@@ -177,92 +209,20 @@ def main():
         "estimators": []
     }
     for tree in model.estimators_:
-        # Exporter chaque arbre sous forme de structure simple
         n_nodes = tree.tree_.node_count
-        children_left = tree.tree_.children_left.tolist()
-        children_right = tree.tree_.children_right.tolist()
-        feature = tree.tree_.feature.tolist()
-        threshold = tree.tree_.threshold.tolist()
-        value = tree.tree_.value.tolist()  # shape (n_nodes, 1, n_classes)
         coefficients["estimators"].append({
-            "children_left": children_left,
-            "children_right": children_right,
-            "feature": feature,
-            "threshold": threshold,
-            "value": [v[0] for v in value]  # aplatir la dimension 1
+            "children_left": tree.tree_.children_left.tolist(),
+            "children_right": tree.tree_.children_right.tolist(),
+            "feature": tree.tree_.feature.tolist(),
+            "threshold": tree.tree_.threshold.tolist(),
+            "value": [v[0] for v in tree.tree_.value.tolist()]
         })
-
-    coeff_path = os.path.join(model_dir, f"{model_name}_coefficients.json")
+    coeff_path = os.path.join(args.output, f"{model_name}_coefficients.json")
     with open(coeff_path, 'w') as f:
         json.dump(coefficients, f, indent=2)
     logger.info(f"Coefficients exportés : {coeff_path}")
 
-    # Génération du fallback codé en dur (Python)
-    fallback_code = f'''"""
-Modèle de détection honeypot (fallback codé en dur).
-Généré automatiquement par train_model.py – Ne pas modifier manuellement.
-"""
-import json, os
-
-_MODEL_COEFFICIENTS = None
-
-def _load_coefficients():
-    global _MODEL_COEFFICIENTS
-    if _MODEL_COEFFICIENTS is None:
-        coeff_file = os.path.join(os.path.dirname(__file__), "..", "..", "..", "models", "{model_name}_coefficients.json")
-        with open(coeff_file) as f:
-            _MODEL_COEFFICIENTS = json.load(f)
-    return _MODEL_COEFFICIENTS
-
-def predict_proba(features):
-    """Retourne la probabilité honeypot (shape [n_samples, 2])."""
-    import numpy as np
-    coeffs = _load_coefficients()
-    features = np.array(features, dtype=np.float32)
-    n_classes = coeffs["n_classes"]
-    all_proba = np.zeros((features.shape[0], n_classes), dtype=np.float64)
-
-    for tree in coeffs["estimators"]:
-        node_indices = np.zeros(features.shape[0], dtype=int)
-        while True:
-            left = np.array(tree["children_left"])
-            right = np.array(tree["children_right"])
-            feature_idx = np.array(tree["feature"])
-            threshold = np.array(tree["threshold"])
-
-            current_features = features[np.arange(len(features)), feature_idx[node_indices]]
-            go_left = current_features <= threshold[node_indices]
-            go_right = ~go_left
-
-            node_indices[go_left] = left[node_indices[go_left]]
-            node_indices[go_right] = right[node_indices[go_right]]
-
-            # Si tous les nœuds sont feuilles, on arrête
-            if np.all(left[node_indices] == -1):
-                break
-
-        # Agrégation des valeurs des feuilles
-        for i, leaf_idx in enumerate(node_indices):
-            all_proba[i] += tree["value"][leaf_idx]
-
-    # Normalisation
-    all_proba /= len(coeffs["estimators"])
-    return all_proba
-
-def predict(features):
-    proba = predict_proba(features)
-    return np.argmax(proba, axis=1)
-'''
-    fallback_path = os.path.join("src", "bxp_secretsonar", "detectors", "fallback_model.py")
-    os.makedirs(os.path.dirname(fallback_path), exist_ok=True)
-    with open(fallback_path, 'w') as f:
-        f.write(fallback_code)
-    logger.info(f"Fallback codé en dur généré : {fallback_path}")
-
-    print("\n✅ Entraînement terminé. Modèles sauvegardés dans", model_dir)
-    print(f"   ONNX : {model_name}.onnx")
-    print(f"   Coefficients JSON : {model_name}_coefficients.json")
-    print(f"   Fallback Python : src/bxp_secretsonar/detectors/fallback_model.py")
+    print(f"\n✅ Entraînement terminé. Modèle : {model_name}")
 
 if __name__ == "__main__":
     main()
