@@ -5,6 +5,8 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 from bxp_secretsonar.discovery.manager import DiscoveryManager
 from bxp_secretsonar.core.engine import SecretSonarEngine
+from bxp_secretsonar.utils.resilience import RetryQueue
+from bxp_secretsonar.utils.opsectools import SessionGhost, ChronoModel, ContextualWeaver
 from bxp_secretsonar.core.decision import AutonomyLevel
 
 STATE_FILE = "daemon_state.json"
@@ -20,6 +22,8 @@ class SecretSonarDaemon:
         self.output_dir = output_dir
         self.auto_exploit = auto_exploit
         self.auto_persist = auto_persist
+        self.retry_queue = RetryQueue()
+        self.weaver = None  # initialisé au premier cycle
         self.autonomy_level = autonomy_level
         self.scheduler = AsyncIOScheduler()
         self.engine = None
@@ -52,6 +56,11 @@ class SecretSonarDaemon:
     async def _run_cycle(self):
         """Un cycle complet : découverte, scan, exploitation, persistance."""
         print(f"\n[{datetime.now()}] Début d'un cycle daemon...")
+        if not self.weaver:
+            persona = {"interests": ["wikipedia.org", "github.com", "stackoverflow.com"]}
+            chrono = ChronoModel()
+            ghost = SessionGhost(persona, chrono, self.engine.stealth_mgr)
+            self.weaver = ContextualWeaver(ghost, chrono)
         # Health check TLS au démarrage du daemon
         if self.engine and self.engine.stealth_mgr:
             health = await self.engine.stealth_mgr.health_check()
@@ -91,7 +100,10 @@ class SecretSonarDaemon:
         if self.auto_exploit:
             self.engine.framework = ExploitFramework(authorized=True)
 
-        await self.engine.run(all_urls)
+        # Wrapper offensif via le weaver pour intercaler du bruit
+        async def offensive_wrapper():
+            await self.engine.run(all_urls)
+        await self.weaver.execute(offensive_wrapper)
 
         # 3. Sauvegarde des résultats
         report = {
@@ -127,6 +139,11 @@ class SecretSonarDaemon:
         """Démarre le planificateur."""
         self._running = True
         self.scheduler.add_job(
+            self._purge_retry_queue,
+            IntervalTrigger(minutes=5),
+            id='retry_job'
+        )
+        self.scheduler.add_job(
             self._run_cycle,
             IntervalTrigger(hours=self.interval_hours),
             id='daemon_cycle',
@@ -156,6 +173,14 @@ class SecretSonarDaemon:
         self.scheduler.shutdown()
         self._save_state()
         print("\nDaemon arrêté proprement.")
+
+    async def _purge_retry_queue(self):
+        """Boucle secondaire : réessaie les cibles en attente."""
+        url = await self.retry_queue.get()
+        if url:
+            print(f"[Retry] Réessai de {url}")
+            self.engine.retry_queue = self.retry_queue  # transmission
+            await self.engine.run([url])
 
     def status(self):
         """Retourne l'état actuel."""

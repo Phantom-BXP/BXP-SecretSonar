@@ -1,6 +1,7 @@
 import httpx
 from bxp_secretsonar.core.models import Candidate, Validated, ValidationResult
 from bxp_secretsonar.utils.stealth import StealthManager
+from bxp_secretsonar.utils.resilience import get_circuit_breaker, CircuitState
 
 VALID_PATTERNS = [
     "generic_api_key", "bearer_token", "api_key", "auth_token", "access_token",
@@ -38,12 +39,27 @@ class GenericHttpValidator:
         secret = candidate.evidence.matched_value
         url = candidate.evidence.source_url or "http://example.com"
 
+        # Vérifier le circuit breaker pour ce service
+        circuit = get_circuit_breaker("generic_http")
+        if circuit.is_open():
+            return Validated(
+                candidate=candidate,
+                result=ValidationResult.UNKNOWN,
+                validator_name="generic_http",
+                proof="Circuit breaker ouvert – service temporairement indisponible"
+            )
         try:
             client = self._get_client("generic")
             client.headers["Authorization"] = f"Bearer {secret}"
             async with client:
                 resp = await client.get(url)
                 self.stealth_mgr.record_request(resp.status_code == 200)
+                if resp.status_code == 200:
+                    circuit.record_success()
+                elif resp.status_code in (401, 403):
+                    circuit.record_failure(temporary=False)  # erreur permanente
+                elif resp.status_code >= 500:
+                    circuit.record_failure(temporary=True)
                 if resp.status_code == 200:
                     return Validated(
                         candidate=candidate,

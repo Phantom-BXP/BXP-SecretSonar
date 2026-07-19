@@ -212,6 +212,16 @@ def autonomy(level):
     print(f"Niveau d'autonomie configuré : {level} ({names[level]})")
     print("Utilisez cette valeur avec --autonomy dans le daemon ou la commande scan.")
 
+
+@cli.command()
+@click.argument('file', type=click.Path(exists=True))
+def load_proxies(file):
+    """Charge une liste de proxies depuis un fichier."""
+    from bxp_secretsonar.utils.stealth import StealthManager
+    sm = StealthManager()
+    sm.load_proxies(file)
+    print(f"Proxies chargés depuis {file}")
+
 if __name__ == '__main__':
     cli()
 

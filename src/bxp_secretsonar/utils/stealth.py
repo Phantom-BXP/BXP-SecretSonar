@@ -5,6 +5,8 @@ try:
 except ImportError:
     ANDROID_FALLBACK_AVAILABLE = False
     create_android_client = None
+
+from bxp_secretsonar.utils.proxy_bandit import ProxyBandit
 from typing import Dict, List, Optional
 from dataclasses import dataclass, field
 
@@ -48,6 +50,7 @@ class StealthManager:
         self._max_profile_duration = 1800
         self._per_target_profiles = {}
         self._health_cache = {}
+        self.proxy_bandit = None  # initialisé plus tard
         self._load_defaults()
         self._load_custom()
 
@@ -215,6 +218,29 @@ class StealthManager:
         if not success:
             self._errors += 1
 
+
+    def load_proxies(self, filepath: str = "proxies.txt"):
+        """Charge une liste de proxies depuis un fichier (un proxy par ligne)."""
+        import os
+        if not os.path.exists(filepath):
+            return
+        with open(filepath, "r") as f:
+            proxies = [line.strip() for line in f if line.strip()]
+        if proxies:
+            self.proxy_bandit = ProxyBandit(proxies)
+            logger.info(f"{len(proxies)} proxies chargés depuis {filepath}")
+
+
+    def record_proxy_success(self, proxy: str):
+        """Enregistre un succès pour le proxy utilisé."""
+        if self.proxy_bandit:
+            self.proxy_bandit.record_success(proxy)
+
+    def record_proxy_failure(self, proxy: str):
+        """Enregistre un échec pour le proxy utilisé."""
+        if self.proxy_bandit:
+            self.proxy_bandit.record_failure(proxy)
+
     def list_profiles(self) -> str:
         lines = []
         for name, profile in self.profiles.items():
@@ -261,7 +287,12 @@ class StealthManager:
         profile = self.profiles.get(self.active_profile, self.profiles["mobile_user"])
         headers = self.get_headers(service)
         transport = self._get_transport(profile)
-        return httpx.AsyncClient(transport=transport, headers=headers, timeout=15.0, proxy=self._proxy)
+        proxy = self._proxy
+        if self.proxy_bandit:
+            best = self.proxy_bandit.select()
+            if best:
+                proxy = best
+        return httpx.AsyncClient(transport=transport, headers=headers, timeout=15.0, proxy=proxy)
 
     def _get_transport(self, profile):
         """Sélectionne le meilleur backend TLS disponible."""
