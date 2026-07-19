@@ -71,9 +71,9 @@ def console_cmd(authorized, load_sessions):
     from bxp_secretsonar.console.interactive import launch_interactive_console
 
     if load_sessions:
-                with open(load_sessions, 'rb') as f:
+        with open(load_sessions, 'r') as f:
             fw = ExploitFramework.model_validate_json(f.read())
-        console.print(f"[green]Sessions chargées depuis {load_sessions}[/]")
+            console.print(f"[green]Sessions chargées depuis {load_sessions}[/]")
     else:
         fw = ExploitFramework(authorized=True)
     launch_interactive_console(fw)
@@ -122,13 +122,18 @@ def daemon(interval, queries, output, allow_private, auto_exploit, auto_persist)
 
 
 @cli.command()
-@click.argument('action', type=click.Choice(['list', 'use', 'create', 'delete']))
+@click.argument('action', type=click.Choice(['list', 'use', 'create', 'delete', 'healthcheck']))
 @click.option('--name', '-n', help='Nom du profil')
 @click.option('--config', '-c', help='Configuration JSON du profil (pour create)')
 def stealth(action, name, config):
     """Gère les profils de furtivité (stealth)."""
     from bxp_secretsonar.utils.stealth import StealthManager
     sm = StealthManager()
+    if action == "healthcheck":
+        import asyncio
+        result = asyncio.run(sm.health_check())
+        print(result)
+        return
     if action == "list":
         print(sm.list_profiles())
     elif action == "use":
@@ -160,6 +165,19 @@ def stealth(action, name, config):
             print(f"Profil {name} supprimé")
         else:
             print(f"Impossible de supprimer {name}")
+
+
+@cli.command()
+@click.option('--profile', '-p', help='Profil à tester (défaut : actif)')
+def stealth_healthcheck(profile):
+    """Vérifie la santé du backend TLS pour un profil donné."""
+    from bxp_secretsonar.utils.stealth import StealthManager
+    import asyncio
+    sm = StealthManager()
+    if profile:
+        sm.use_profile(profile)
+    result = asyncio.run(sm.health_check())
+    print(result)
 
 if __name__ == '__main__':
     cli()

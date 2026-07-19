@@ -1,4 +1,5 @@
 import random, time, json, os
+from bxp_secretsonar.utils.tls import TLS_CLIENT_AVAILABLE, CURL_CFFI_AVAILABLE, TLSHealthCheck, TlsClientTransport, CurlCFFITransport
 from typing import Dict, List, Optional
 from dataclasses import dataclass, field
 
@@ -13,6 +14,7 @@ class StealthProfile:
     description: str = ""
     score: float = 0.0
     tags: List[str] = field(default_factory=list)
+    tls_fingerprint: str = ""  # ex: chrome_120
 
     def evaluate(self) -> float:
         score = 0.5
@@ -40,6 +42,7 @@ class StealthManager:
         self._max_requests_per_profile = 50
         self._max_profile_duration = 1800
         self._per_target_profiles = {}
+        self._health_cache = {}
         self._load_defaults()
         self._load_custom()
 
@@ -58,6 +61,7 @@ class StealthManager:
                 },
                 delays=(0.5, 2.0),
                 description="Utilisateur mobile standard",
+                tls_fingerprint="safari_17_0",
                 tags=["mobile", "consumer"]
             ),
             StealthProfile(
@@ -77,6 +81,7 @@ class StealthManager:
                 },
                 delays=(1.0, 4.0),
                 description="Employé de bureau derrière un VPN d'entreprise",
+                tls_fingerprint="chrome_120",
                 tags=["enterprise", "corporate"]
             ),
             StealthProfile(
@@ -92,6 +97,7 @@ class StealthManager:
                 },
                 delays=(2.0, 10.0),
                 description="Robot d'indexation Google",
+                tls_fingerprint="chrome_120",
                 tags=["bot", "search_engine"]
             ),
             StealthProfile(
@@ -107,6 +113,7 @@ class StealthManager:
                 },
                 delays=(0.1, 0.5),
                 description="Client API / script",
+                tls_fingerprint="",
                 tags=["api", "automation"]
             ),
         ]
@@ -242,3 +249,61 @@ class StealthManager:
                 self.active_profile = "mobile_user"
             return True
         return False
+
+    def get_client(self, service: str = "generic"):
+        """Retourne un client HTTP configuré avec le transport TLS approprié."""
+        import httpx
+        profile = self.profiles.get(self.active_profile, self.profiles["mobile_user"])
+        headers = self.get_headers(service)
+        transport = self._get_transport(profile)
+        return httpx.AsyncClient(transport=transport, headers=headers, timeout=15.0, proxy=self._proxy)
+
+    def _get_transport(self, profile):
+        """Sélectionne le meilleur backend TLS disponible."""
+        fingerprint = profile.tls_fingerprint
+        if not fingerprint:
+            return None
+        if TLS_CLIENT_AVAILABLE:
+            return TlsClientTransport(fingerprint)
+        if CURL_CFFI_AVAILABLE:
+            return CurlCFFITransport(fingerprint)
+        return None
+
+    def tls_status(self) -> str:
+        """Retourne l'état des backends TLS."""
+        status = TLSHealthCheck.get_backend_status()
+        lines = []
+        for backend, info in status.items():
+            avail = "✅" if info["available"] else "❌"
+            version = info.get("version", "N/A")
+            lines.append(f"{avail} {backend}: {version}")
+        return "\n".join(lines)
+
+    async def health_check(self) -> str:
+        """Vérifie la santé du backend TLS actif et retourne un rapport."""
+        profile = self.profiles.get(self.active_profile)
+        if not profile or not profile.tls_fingerprint:
+            return "Aucun fingerprint TLS configuré pour le profil actif."
+
+        backend = None
+        if TLS_CLIENT_AVAILABLE:
+            backend = "tls_client"
+        elif CURL_CFFI_AVAILABLE:
+            backend = "curl_cffi"
+        else:
+            return "Aucun backend TLS disponible (tls_client ou curl_cffi)."
+
+        # Validation JA3 (avec cache pour éviter les requêtes répétées)
+        cache_key = f"{backend}_{profile.tls_fingerprint}"
+        if cache_key in self._health_cache:
+            return self._health_cache[cache_key]
+
+        from bxp_secretsonar.utils.tls import TLSHealthCheck
+        valid = await TLSHealthCheck.validate_ja3(backend, profile.tls_fingerprint)
+        if valid:
+            msg = f"✅ Backend {backend} génère le bon JA3 pour {profile.tls_fingerprint}"
+        else:
+            msg = f"❌ Backend {backend} NE génère PAS le bon JA3 pour {profile.tls_fingerprint}. Vérifiez l'installation."
+
+        self._health_cache[cache_key] = msg
+        return msg

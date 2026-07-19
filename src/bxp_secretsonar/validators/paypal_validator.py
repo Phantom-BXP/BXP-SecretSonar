@@ -1,17 +1,22 @@
 import httpx
 from bxp_secretsonar.core.models import Candidate, Validated, ValidationResult
 from bxp_secretsonar.validators.generic_http import GenericHttpValidator
+from bxp_secretsonar.utils.stealth import StealthManager
 
 class PayPalValidator(GenericHttpValidator):
+    def __init__(self, ssl_verify: bool = True, timeout: float = 5.0, stealth_mgr: StealthManager = None):
+        super().__init__(ssl_verify=ssl_verify, timeout=timeout, stealth_mgr=stealth_mgr)
+
     async def validate(self, candidate: Candidate) -> Validated:
         validated = await super().validate(candidate)
         if validated.result != ValidationResult.CONFIRMED:
             return validated
         secret = candidate.evidence.matched_value
         try:
-            async with httpx.AsyncClient(timeout=8.0) as client:
-                headers = {"Authorization": f"Bearer {secret}", "Content-Type": "application/json"}
-                resp = await client.get("https://api-m.paypal.com/v1/identity/oauth2/userinfo?schema=openid", headers=headers)
+            client = self._get_client("paypal")
+            async with client:
+                resp = await client.get("https://api-m.paypal.com/v1/identity/oauth2/userinfo?schema=openid",
+                                         headers={"Authorization": f"Bearer {secret}", "Content-Type": "application/json"})
                 if resp.status_code == 200:
                     data = resp.json()
                     email = data.get("email", "")

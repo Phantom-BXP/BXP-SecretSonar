@@ -1,18 +1,20 @@
 import httpx
 from bxp_secretsonar.core.models import Candidate, Validated, ValidationResult
 from bxp_secretsonar.validators.generic_http import GenericHttpValidator
+from bxp_secretsonar.utils.stealth import StealthManager
 
 class ShopifyValidator(GenericHttpValidator):
+    def __init__(self, ssl_verify: bool = True, timeout: float = 5.0, stealth_mgr: StealthManager = None):
+        super().__init__(ssl_verify=ssl_verify, timeout=timeout, stealth_mgr=stealth_mgr)
+
     async def validate(self, candidate: Candidate) -> Validated:
         validated = await super().validate(candidate)
         if validated.result != ValidationResult.CONFIRMED:
             return validated
         secret = candidate.evidence.matched_value
-        # On essaie avec un store générique (pas idéal, mais permet de tester la clé)
-        # En pratique, il faut le store name, mais on peut tenter une requête générique.
         try:
-            async with httpx.AsyncClient(timeout=8.0) as client:
-                # Tentative d'utiliser la clé comme X-Shopify-Access-Token sur un admin API endpoint fictif
+            client = self._get_client("shopify")
+            async with client:
                 resp = await client.get("https://test.myshopify.com/admin/api/2024-01/shop.json", headers={"X-Shopify-Access-Token": secret})
                 # Le code 401 signifie clé invalide ou mauvais store, 200 = valide
                 if resp.status_code == 200:
@@ -21,6 +23,8 @@ class ShopifyValidator(GenericHttpValidator):
                 elif resp.status_code == 401:
                     validated.candidate.confidence_score = max(0.1, validated.candidate.confidence_score - 0.3)
                     validated.result = ValidationResult.REJECTED
+
+            validated.candidate.confidence_score = max(0.1, validated.candidate.confidence_score - 0.1)
         except Exception:
             validated.candidate.confidence_score = max(0.1, validated.candidate.confidence_score - 0.1)
         return validated

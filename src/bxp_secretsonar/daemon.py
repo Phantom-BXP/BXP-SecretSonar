@@ -49,6 +49,10 @@ class SecretSonarDaemon:
     async def _run_cycle(self):
         """Un cycle complet : découverte, scan, exploitation, persistance."""
         print(f"\n[{datetime.now()}] Début d'un cycle daemon...")
+        # Health check TLS au démarrage du daemon
+        if self.engine and self.engine.stealth_mgr:
+            health = await self.engine.stealth_mgr.health_check()
+            print(f"[health] {health}")
         # Rotation de profil furtif pour chaque cycle
         self.engine.stealth_mgr.rotate_profile('smart')
         queries = self._load_queries()

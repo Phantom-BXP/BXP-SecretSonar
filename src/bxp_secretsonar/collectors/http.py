@@ -23,8 +23,9 @@ class HttpCollector:
     async def collect(self, url):
         if not self.client:
             raise RuntimeError("HttpCollector not started")
+        client = self.stealth_mgr.get_client("collector") if hasattr(self, 'stealth_mgr') else self.client
         async with self.semaphore:
-            resp = await self.client.get(url)
+            resp = await client.get(url)
             resp.raise_for_status()
             if hasattr(self, 'stealth_mgr'):
                 self.stealth_mgr.record_request(True)
