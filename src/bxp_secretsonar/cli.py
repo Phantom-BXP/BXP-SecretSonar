@@ -179,6 +179,20 @@ def stealth_healthcheck(profile):
     result = asyncio.run(sm.health_check())
     print(result)
 
+
+@cli.command()
+@click.option('--offline', is_flag=True, help='Installe les dépendances TLS depuis vendor/')
+def setup(offline):
+    """Configure BXP‑SecretSonar (installation de dépendances, etc.)"""
+    if offline:
+        import subprocess, sys
+        print("Installation hors ligne des dépendances TLS...")
+        for pkg in ["tls_client", "curl_cffi"]:
+            subprocess.run([sys.executable, "install_deps.py", pkg])
+        print("Terminé. Relancez BXP‑SecretSonar pour utiliser les nouveaux backends TLS.")
+    else:
+        print("Aucune option spécifiée. Utilisez --offline pour l'installation hors ligne.")
+
 if __name__ == '__main__':
     cli()
 

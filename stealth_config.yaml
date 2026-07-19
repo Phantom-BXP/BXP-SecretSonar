@@ -1,0 +1,11 @@
+tls:
+  preferred_backend: "auto"  # tls_client, curl_cffi, auto
+  fallback_enabled: true
+rotation:
+  strategy: "smart"  # smart, random, highest_score
+  max_requests_per_profile: 50
+  max_profile_duration: 1800
+proxy:
+  pool_file: ""  # chemin vers un fichier de proxies
+session:
+  preserve_on_rotate: true

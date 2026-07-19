@@ -1,0 +1,26 @@
+{
+  "wheels": [
+    {
+      "package": "tls_client",
+      "version": "1.0.0",
+      "targets": [
+        { "os": "linux", "arch": "x86_64", "python": "cp311", "file": "tls_client-1.0.0-cp311-manylinux_x86_64.whl" },
+        { "os": "linux", "arch": "aarch64", "python": "cp311", "file": "tls_client-1.0.0-cp311-manylinux_aarch64.whl" },
+        { "os": "darwin", "arch": "x86_64", "python": "cp311", "file": "tls_client-1.0.0-cp311-macosx_x86_64.whl" },
+        { "os": "darwin", "arch": "arm64", "python": "cp311", "file": "tls_client-1.0.0-cp311-macosx_arm64.whl" },
+        { "os": "windows", "arch": "amd64", "python": "cp311", "file": "tls_client-1.0.0-cp311-win_amd64.whl" }
+      ]
+    },
+    {
+      "package": "curl_cffi",
+      "version": "0.6.0",
+      "targets": [
+        { "os": "linux", "arch": "x86_64", "python": "cp311", "file": "curl_cffi-0.6.0-cp311-manylinux_x86_64.whl" },
+        { "os": "linux", "arch": "aarch64", "python": "cp311", "file": "curl_cffi-0.6.0-cp311-manylinux_aarch64.whl" },
+        { "os": "darwin", "arch": "x86_64", "python": "cp311", "file": "curl_cffi-0.6.0-cp311-macosx_x86_64.whl" },
+        { "os": "darwin", "arch": "arm64", "python": "cp311", "file": "curl_cffi-0.6.0-cp311-macosx_arm64.whl" },
+        { "os": "windows", "arch": "amd64", "python": "cp311", "file": "curl_cffi-0.6.0-cp311-win_amd64.whl" }
+      ]
+    }
+  ]
+}

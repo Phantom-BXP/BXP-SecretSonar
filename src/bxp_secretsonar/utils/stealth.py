@@ -307,3 +307,46 @@ class StealthManager:
 
         self._health_cache[cache_key] = msg
         return msg
+
+    def migrate_session(self, old_client, new_client):
+        """Transfère les cookies et headers de session d'un client à l'autre."""
+        if not old_client or not new_client:
+            return
+        # Transférer les cookies
+        if hasattr(old_client, 'cookies'):
+            for cookie in old_client.cookies.jar:
+                new_client.cookies.set(cookie.name, cookie.value, domain=cookie.domain, path=cookie.path)
+        # Transférer les headers persistants (ex: Authorization, User-Agent)
+        for header in ["Authorization", "X-API-Key"]:
+            if header in old_client.headers:
+                new_client.headers[header] = old_client.headers[header]
+
+    def rotate_profile(self, strategy: str = "smart"):
+        old_profile = self.active_profile
+        old_client = getattr(self, '_current_client', None)
+        # ... (logique de rotation existante)
+        # Après avoir changé de profil, recréer le client et migrer la session
+        if old_client:
+            new_client = self.get_client("generic")
+            self.migrate_session(old_client, new_client)
+            self._current_client = new_client
+        else:
+            self._current_client = self.get_client("generic")
+
+    def load_config(self, config_path: str = "stealth_config.yaml"):
+        """Charge la configuration YAML et applique les paramètres."""
+        import yaml
+        try:
+            with open(config_path, 'r') as f:
+                config = yaml.safe_load(f)
+            # Appliquer les paramètres
+            self._max_requests_per_profile = config.get('rotation', {}).get('max_requests_per_profile', 50)
+            self._max_profile_duration = config.get('rotation', {}).get('max_profile_duration', 1800)
+            self.preserve_session = config.get('session', {}).get('preserve_on_rotate', True)
+            # Appliquer le backend TLS préféré
+            preferred = config.get('tls', {}).get('preferred_backend', 'auto')
+            if preferred != "auto":
+                # Forcer l'utilisation d'un backend spécifique (à implémenter si nécessaire)
+                pass
+        except FileNotFoundError:
+            pass  # pas de fichier de config, on garde les valeurs par défaut
